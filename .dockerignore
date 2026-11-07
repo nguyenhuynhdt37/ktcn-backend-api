@@ -11,3 +11,9 @@ logs/
 *.log
 .env
 .git/
+
+.env*
+!.env.example
+*.bak-*
+deploy/
+backups/

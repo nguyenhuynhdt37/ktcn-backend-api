@@ -1,0 +1,76 @@
+name: Promote production
+run-name: '${{ inputs.action }} KTCT ${{ inputs.release }}'
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Operation
+        type: choice
+        options: [promote, rollback]
+        default: promote
+      release:
+        description: 'Exact RELEASE_ID from a successful test deployment'
+        required: true
+        type: string
+permissions:
+  contents: read
+  deployments: read
+  actions: read
+concurrency:
+  group: ktcn-production
+  cancel-in-progress: false
+jobs:
+  verify-approval-policy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail closed unless production requires approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE: ${{ inputs.release }}
+        run: |
+          [[ "$RELEASE" =~ ^[0-9]{14}-[0-9a-f]{12}$ ]] || exit 1
+          gh api "repos/$REPOSITORY/environments/production" \
+            --jq '.protection_rules[] | select(.type == "required_reviewers") | .reviewers | length' \
+            | grep -Eq '^[1-9][0-9]*$'
+  deploy:
+    needs: verify-approval-policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: production
+      url: https://ktcn.itup.io.vn/vi
+    steps:
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ktcn-ci
+          ping: 100.122.190.92
+      - name: Deploy approved release
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          ACTION: ${{ inputs.action }}
+          RELEASE: ${{ inputs.release }}
+          REGISTRY_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+          REGISTRY_USER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_KEY" && test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/ktcn_deploy
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          trap 'rm -f ~/.ssh/ktcn_deploy "$RUNNER_TEMP/deploy.json"' EXIT
+          python3 - <<'PYTHON' > "$RUNNER_TEMP/deploy.json"
+          import json, os
+          e = os.environ
+          print(json.dumps({"action":e["ACTION"], "release":e["RELEASE"],
+            "registry_user":e["REGISTRY_USER"],"registry_token":e["REGISTRY_TOKEN"]}))
+          PYTHON
+          ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
+            -i ~/.ssh/ktcn_deploy admin@100.122.190.92 deploy < "$RUNNER_TEMP/deploy.json"
+          printf 'Production operation succeeded: `%s`\n' "$RELEASE" >> "$GITHUB_STEP_SUMMARY"
