@@ -12,13 +12,13 @@ permissions:
 defaults:
   run:
     shell: bash
-concurrency:
-  group: test-${{ github.repository }}-${{ github.ref }}
-  cancel-in-progress: false
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    concurrency:
+      group: build-${{ github.repository }}-${{ github.ref }}
+      cancel-in-progress: true
     permissions:
       contents: read
       packages: write
@@ -113,7 +113,7 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/ktcn_deploy
           printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          trap 'rm -f ~/.ssh/ktcn_deploy' EXIT
+          trap 'rm -f ~/.ssh/ktcn_deploy "$RUNNER_TEMP/deploy.json"' EXIT
           python3 - <<'PYTHON' > "$RUNNER_TEMP/deploy.json"
           import json, os
           e = os.environ
@@ -148,6 +148,9 @@ jobs:
             --jq '.protection_rules[] | select(.type == "required_reviewers") | .reviewers | length' \
             | grep -Eq '^[1-9][0-9]*$'
   deploy-production:
+    concurrency:
+      group: ktcn-production
+      cancel-in-progress: false
     needs: [deploy-test, verify-approval-policy]
     runs-on: ubuntu-latest
     timeout-minutes: 20

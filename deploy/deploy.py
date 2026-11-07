@@ -144,8 +144,18 @@ def get_release(release):
     return data
 
 
+def current_commit(component):
+    repo = COMPONENTS[component][0]
+    output = run('git', 'ls-remote', f'https://github.com/nguyenhuynhdt37/{repo}.git',
+                 'refs/heads/main', capture_output=True, timeout=30).stdout.strip()
+    return output.split()[0] if output else ''
+
+
 def stage(request):
     component = request['component']
+    if current_commit(component) != request['commit']:
+        print('Skipping superseded commit; main has a newer version.', flush=True)
+        return
     path = ROOT / 'staging-state.json'
     previous = load(path, {})
     state = copy.deepcopy(previous)

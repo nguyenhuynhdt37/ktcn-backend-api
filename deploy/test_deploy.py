@@ -54,10 +54,17 @@ class DeploymentTests(unittest.TestCase):
             run.assert_not_called()
 
     def test_failed_test_invalidates_review_candidate(self):
-        with tempfile.TemporaryDirectory() as directory,patch.object(deploy,'ROOT',Path(directory)),patch.object(deploy,'run',side_effect=RuntimeError('pull failed')):
+        with tempfile.TemporaryDirectory() as directory,patch.object(deploy,'ROOT',Path(directory)),patch.object(deploy,'current_commit',return_value='b'*40),patch.object(deploy,'run',side_effect=RuntimeError('pull failed')):
             candidate=Path(directory)/'candidate.json'; deploy.save(candidate,{'release':'previous'})
             with self.assertRaises(RuntimeError): deploy.stage(self.request())
             self.assertFalse(candidate.exists())
+
+    def test_superseded_build_cannot_replace_test_candidate(self):
+        with tempfile.TemporaryDirectory() as directory,patch.object(deploy,'ROOT',Path(directory)),patch.object(deploy,'current_commit',return_value='c'*40),patch.object(deploy,'run') as run:
+            candidate=Path(directory)/'candidate.json'; deploy.save(candidate,{'release':'keep-current'})
+            deploy.stage(self.request())
+            self.assertEqual(deploy.load(candidate)['release'],'keep-current')
+            run.assert_not_called()
 
 
 if __name__ == '__main__': unittest.main()

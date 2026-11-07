@@ -9,7 +9,10 @@ Three repositories publish Docker images on pushes to `main`:
 Pull requests build images without publishing or deploying. Each main-branch run
 builds test and production variants from one commit, then deploys its component to
 test. Frontend public URLs are baked into each variant. Backend variants may share
-the same digest. Every deployment uses the immutable image digest, never `latest`.
+the same digest. Every deployment uses the immutable image digest, never `latest`. Superseded builds
+are canceled; the host also checks the current main commit before deploying, so
+a slow older build cannot replace a newer test candidate. Pending production
+approval does not block further test builds.
 
 When all three test components pass HTTP checks (including DB/Redis health), the
 server writes a full release manifest. The workflow that completes that candidate
@@ -125,9 +128,9 @@ python3 -m unittest discover -s deploy -p test_deploy.py -v
 Validate workflows with actionlint. Builds run in GitHub-hosted Linux AMD64
 runners; the deployment host only pulls and runs the resulting images. After
 initial deployment, verify test login, API calls and media uploads through the
-public HTTPS domains before approving the first production release. Credentials
-for a test admin must be provisioned on the test DB separately; production users
-are not copied during bootstrap.
+public HTTPS domains before approving the first production release. A separate test superadmin and vi/en languages have been provisioned on this
+host; login details are stored at `staging/admin-login.json` with mode 0600.
+Production users are not copied during bootstrap.
 
 References: [GitHub environments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments),
 [Tailscale GitHub Action](https://tailscale.com/docs/integrations/github/github-action).
