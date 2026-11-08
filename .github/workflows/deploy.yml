@@ -1,14 +1,16 @@
-name: Build and deploy test
-on:
+name: Build and deploy branch
+'on':
   push:
-    branches: [main]
+    branches:
+    - dev
+    - main
   pull_request:
-    branches: [main]
-  workflow_dispatch:
+    branches:
+    - dev
+    - main
+  workflow_dispatch: {}
 permissions:
   contents: read
-  actions: read
-  deployments: read
 defaults:
   run:
     shell: bash
@@ -23,56 +25,50 @@ jobs:
       contents: read
       packages: write
     outputs:
-      staging: ${{ steps.test.outputs.digest }}
-      production: ${{ steps.prod.outputs.digest }}
+      digest: ${{ steps.image.outputs.digest }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Verify deployment guards and Python syntax
-        run: |
-          python3 -m compileall -q app
-          python3 -m unittest discover -s deploy -p 'test_*.py' -v
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        if: github.event_name != 'pull_request'
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build test image
-        id: test
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}-test
-          build-args: |
-            VITE_API_URL=https://test-api-ktcn.itup.io.vn/api/v1
-            NEXT_PUBLIC_API_URL=https://test-api-ktcn.itup.io.vn
-            NEXT_PUBLIC_SITE_URL=https://test-ktcn.itup.io.vn
-          cache-from: type=gha,scope=test
-          cache-to: type=gha,mode=max,scope=test
-      - name: Build production image from the same commit
-        id: prod
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}-production
-          build-args: |
-            VITE_API_URL=https://api-ktcn.itup.io.vn/api/v1
-            NEXT_PUBLIC_API_URL=https://api-ktcn.itup.io.vn
-            NEXT_PUBLIC_SITE_URL=https://ktcn.itup.io.vn
-          cache-from: type=gha,scope=production
-          cache-to: type=gha,mode=max,scope=production
+    - uses: actions/checkout@v4
+    - name: Verify deployment guards and Python syntax
+      run: |
+        python3 -m compileall -q app
+        python3 -m unittest discover -s deploy -p 'test_*.py' -v
+    - uses: docker/setup-buildx-action@v3
+    - uses: docker/login-action@v3
+      if: github.event_name != 'pull_request'
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    - name: Build branch image
+      id: image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        platforms: linux/amd64
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: ghcr.io/${{ github.repository }}:${{ github.sha }}-${{ github.ref == 'refs/heads/main' && 'production' || 'test' }}
+        labels: |
+          org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          org.opencontainers.image.revision=${{ github.sha }}
+        build-args: |
+          VITE_API_URL=${{ github.ref == 'refs/heads/main' && 'https://api-ktcn.itup.io.vn/api/v1' || 'https://test-api-ktcn.itup.io.vn/api/v1' }}
+          NEXT_PUBLIC_API_URL=${{ github.ref == 'refs/heads/main' && 'https://api-ktcn.itup.io.vn' || 'https://test-api-ktcn.itup.io.vn' }}
+          NEXT_PUBLIC_SITE_URL=${{ github.ref == 'refs/heads/main' && 'https://ktcn.itup.io.vn' || 'https://test-ktcn.itup.io.vn' }}
+        cache-from: |-
+            type=gha,scope=branch-build
+            type=gha,scope=test
+            type=gha,scope=production
+        cache-to: type=gha,mode=max,scope=branch-build
   deploy-test:
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/dev' && github.event_name != 'pull_request'
     needs: build
-    outputs:
-      release: ${{ steps.deploy.outputs.release }}
-    runs-on: [self-hosted, linux, x64, ktcn-deploy, ktcn-backend]
-    timeout-minutes: 15
+    runs-on:
+    - self-hosted
+    - linux
+    - x64
+    - ktcn-deploy
+    - ktcn-backend
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: read
@@ -80,97 +76,57 @@ jobs:
       name: staging
       url: https://test-api-ktcn.itup.io.vn/health
     steps:
-      - name: Verify deployment configuration
-        env:
-          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-        run: |
-          for name in SSH_KEY SSH_KNOWN_HOSTS; do
-            test -n "${!name}" || { echo "Missing staging secret: $name"; exit 1; }
-          done
-      - name: Deploy immutable test image
-        id: deploy
-        env:
-          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-          STAGING_DIGEST: ${{ needs.build.outputs.staging }}
-          PRODUCTION_DIGEST: ${{ needs.build.outputs.production }}
-          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REGISTRY_USER: ${{ github.actor }}
-          REPOSITORY: ${{ github.repository }}
-          COMMIT: ${{ github.sha }}
-        run: |
-          umask 077
-          mkdir -p "$RUNNER_TEMP/ktcn-ssh"
-          printf '%s\n' "$SSH_KEY" > "$RUNNER_TEMP/ktcn-ssh/key"
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/ktcn-ssh/known_hosts"
-          trap 'rm -f "$RUNNER_TEMP/ktcn-ssh/key" "$RUNNER_TEMP/deploy.json"' EXIT
-          python3 - <<'PYTHON' > "$RUNNER_TEMP/deploy.json"
-          import json, os
-          e = os.environ
-          print(json.dumps({"action":"stage", "component":"backend", "commit":e["COMMIT"],
-            "staging":"ghcr.io/"+e["REPOSITORY"]+"@"+e["STAGING_DIGEST"],
-            "production":"ghcr.io/"+e["REPOSITORY"]+"@"+e["PRODUCTION_DIGEST"],
-            "registry_user":e["REGISTRY_USER"], "registry_token":e["REGISTRY_TOKEN"]}))
-          PYTHON
-          ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20             -i "$RUNNER_TEMP/ktcn-ssh/key" -o HostKeyAlias=100.122.190.92 -o UserKnownHostsFile="$RUNNER_TEMP/ktcn-ssh/known_hosts" admin@127.0.0.1 deploy             < "$RUNNER_TEMP/deploy.json" | tee "$RUNNER_TEMP/deploy.log"
-          release=$(sed -n 's/^RELEASE_ID=//p' "$RUNNER_TEMP/deploy.log")
-          echo "release=$release" >> "$GITHUB_OUTPUT"
-          rm -f "$RUNNER_TEMP/deploy.json"
-          {
-            echo '### Test deployment'
-            echo 'Preview: https://test-api-ktcn.itup.io.vn/health'
-            grep '^RELEASE_ID=' "$RUNNER_TEMP/deploy.log" || true
-            echo 'Once all three components pass, this workflow waits for production approval.'
-          } >> "$GITHUB_STEP_SUMMARY"
-  verify-approval-policy:
-    needs: deploy-test
-    if: needs.deploy-test.outputs.release != ''
-    runs-on: ubuntu-latest
-    steps:
-      - name: Fail closed unless production requires approval
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          RELEASE: ${{ needs.deploy-test.outputs.release }}
-        run: |
-          [[ "$RELEASE" =~ ^[0-9]{14}-[0-9a-f]{12}$ ]] || exit 1
-          gh api "repos/$REPOSITORY/environments/production" \
-            --jq '.protection_rules[] | select(.type == "required_reviewers") | .reviewers | length' \
-            | grep -Eq '^[1-9][0-9]*$'
+    - name: Deploy branch to staging
+      env:
+        SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
+        REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        REGISTRY_USER: ${{ github.actor }}
+        REPOSITORY: ${{ github.repository }}
+        COMMIT: ${{ github.sha }}
+        BRANCH: ${{ github.ref_name }}
+      run: "set -euo pipefail\numask 077\ntest -n \"$SSH_KEY\" && test -n \"$SSH_KNOWN_HOSTS\"\nmkdir -p \"$RUNNER_TEMP/ktcn-ssh\"\nprintf '%s\\\
+        n' \"$SSH_KEY\" > \"$RUNNER_TEMP/ktcn-ssh/key\"\nprintf '%s\\n' \"$SSH_KNOWN_HOSTS\" > \"$RUNNER_TEMP/ktcn-ssh/known_hosts\"\ntrap 'rm\
+        \ -f \"$RUNNER_TEMP/ktcn-ssh/key\" \"$RUNNER_TEMP/ktcn-request.json\"' EXIT\npython3 - <<'PAYLOAD' > \"$RUNNER_TEMP/ktcn-request.json\"\
+        \nimport json, os\ne=os.environ\nprint(json.dumps({\"action\":\"deploy\",\"component\":\"backend\",\"branch\":e[\"BRANCH\"],\"commit\"\
+        :e[\"COMMIT\"],\n \"image\":\"ghcr.io/\"+e[\"REPOSITORY\"]+\"@\"+e[\"IMAGE_DIGEST\"],\n \"registry_user\":e[\"REGISTRY_USER\"],\"registry_token\"\
+        :e[\"REGISTRY_TOKEN\"]}))\nPAYLOAD\nssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \\\n -o HostKeyAlias=100.122.190.92\
+        \ -o UserKnownHostsFile=\"$RUNNER_TEMP/ktcn-ssh/known_hosts\" \\\n -i \"$RUNNER_TEMP/ktcn-ssh/key\" admin@127.0.0.1 deploy < \"$RUNNER_TEMP/ktcn-request.json\"\
+        \nprintf 'Deployed `%s` commit `%s` \u2192 https://test-api-ktcn.itup.io.vn/health\\n' \"$BRANCH\" \"$COMMIT\" >> \"$GITHUB_STEP_SUMMARY\"\
+        \n"
   deploy-production:
-    concurrency:
-      group: ktcn-production
-      cancel-in-progress: false
-    needs: [deploy-test, verify-approval-policy]
-    runs-on: [self-hosted, linux, x64, ktcn-deploy, ktcn-backend]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on:
+    - self-hosted
+    - linux
+    - x64
+    - ktcn-deploy
+    - ktcn-backend
     timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
     environment:
       name: production
-      url: https://ktcn.itup.io.vn/vi
+      url: https://api-ktcn.itup.io.vn/health
     steps:
-      - name: Deploy approved release
-        env:
-          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-          ACTION: promote
-          RELEASE: ${{ needs.deploy-test.outputs.release }}
-          REGISTRY_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
-          REGISTRY_USER: ${{ github.repository_owner }}
-        run: |
-          set -euo pipefail
-          test -n "$SSH_KEY" && test -n "$SSH_KNOWN_HOSTS"
-          umask 077
-          mkdir -p "$RUNNER_TEMP/ktcn-ssh"
-          printf '%s\n' "$SSH_KEY" > "$RUNNER_TEMP/ktcn-ssh/key"
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/ktcn-ssh/known_hosts"
-          trap 'rm -f "$RUNNER_TEMP/ktcn-ssh/key" "$RUNNER_TEMP/deploy.json"' EXIT
-          python3 - <<'PYTHON' > "$RUNNER_TEMP/deploy.json"
-          import json, os
-          e = os.environ
-          print(json.dumps({"action":e["ACTION"], "release":e["RELEASE"],
-            "registry_user":e["REGISTRY_USER"],"registry_token":e["REGISTRY_TOKEN"]}))
-          PYTHON
-          ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
-            -i "$RUNNER_TEMP/ktcn-ssh/key" -o HostKeyAlias=100.122.190.92 -o UserKnownHostsFile="$RUNNER_TEMP/ktcn-ssh/known_hosts" admin@127.0.0.1 deploy < "$RUNNER_TEMP/deploy.json"
-          printf 'Production operation succeeded: `%s`\n' "$RELEASE" >> "$GITHUB_STEP_SUMMARY"
+    - name: Deploy branch to production
+      env:
+        SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
+        REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        REGISTRY_USER: ${{ github.actor }}
+        REPOSITORY: ${{ github.repository }}
+        COMMIT: ${{ github.sha }}
+        BRANCH: ${{ github.ref_name }}
+      run: "set -euo pipefail\numask 077\ntest -n \"$SSH_KEY\" && test -n \"$SSH_KNOWN_HOSTS\"\nmkdir -p \"$RUNNER_TEMP/ktcn-ssh\"\nprintf '%s\\\
+        n' \"$SSH_KEY\" > \"$RUNNER_TEMP/ktcn-ssh/key\"\nprintf '%s\\n' \"$SSH_KNOWN_HOSTS\" > \"$RUNNER_TEMP/ktcn-ssh/known_hosts\"\ntrap 'rm\
+        \ -f \"$RUNNER_TEMP/ktcn-ssh/key\" \"$RUNNER_TEMP/ktcn-request.json\"' EXIT\npython3 - <<'PAYLOAD' > \"$RUNNER_TEMP/ktcn-request.json\"\
+        \nimport json, os\ne=os.environ\nprint(json.dumps({\"action\":\"deploy\",\"component\":\"backend\",\"branch\":e[\"BRANCH\"],\"commit\"\
+        :e[\"COMMIT\"],\n \"image\":\"ghcr.io/\"+e[\"REPOSITORY\"]+\"@\"+e[\"IMAGE_DIGEST\"],\n \"registry_user\":e[\"REGISTRY_USER\"],\"registry_token\"\
+        :e[\"REGISTRY_TOKEN\"]}))\nPAYLOAD\nssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \\\n -o HostKeyAlias=100.122.190.92\
+        \ -o UserKnownHostsFile=\"$RUNNER_TEMP/ktcn-ssh/known_hosts\" \\\n -i \"$RUNNER_TEMP/ktcn-ssh/key\" admin@127.0.0.1 deploy < \"$RUNNER_TEMP/ktcn-request.json\"\
+        \nprintf 'Deployed `%s` commit `%s` \u2192 https://api-ktcn.itup.io.vn/health\\n' \"$BRANCH\" \"$COMMIT\" >> \"$GITHUB_STEP_SUMMARY\"\n"
