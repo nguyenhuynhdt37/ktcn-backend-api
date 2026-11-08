@@ -31,10 +31,6 @@ def main():
     user=api('user')
     if user['login'] != OWNER:
         raise SystemExit(f'Log in as {OWNER}; current GitHub login is {user["login"]}')
-    oauth_path=KEYS/'tailscale.json'
-    oauth=json.loads(oauth_path.read_text()) if oauth_path.exists() else {}
-    client=os.getenv('TS_OAUTH_CLIENT_ID') or oauth.get('client_id','')
-    credential=os.getenv('TS_OAUTH_SECRET') or oauth.get('client_secret','')
     for component,repo in REPOS.items():
         for environment in ['staging','production']:
             path=f'repos/{OWNER}/{repo}/environments/{environment}'
@@ -49,13 +45,15 @@ def main():
             key='production' if environment=='production' else component
             secret(repo,'DEPLOY_SSH_KEY',(KEYS/key).read_text(),environment)
             secret(repo,'DEPLOY_KNOWN_HOSTS',(KEYS/'known_hosts').read_text(),environment)
-        if client and credential:
-            secret(repo,'TS_OAUTH_CLIENT_ID',client)
-            secret(repo,'TS_OAUTH_SECRET',credential)
-        print(repo+': deployment environments and restricted SSH keys configured')
-    if not client or not credential:
-        raise SystemExit('Tailscale OAuth not set. Supply TS_OAUTH_CLIENT_ID/TS_OAUTH_SECRET or ~/.config/ktcn-deploy/tailscale.json, then run again.')
-    print('GitHub deployment configuration complete. Verify tailnet tag:ktcn-ci can reach 100.122.190.92:22.')
+        token=api(f'repos/{OWNER}/{repo}/actions/runners/registration-token','POST')['token']
+        payload=json.dumps({'component':component,'token':token})
+        args=['ssh','-T','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes',
+              '-i',str(KEYS/'runner-register'),'admin@100.122.190.92','register']
+        result=subprocess.run(args,input=payload,text=True,capture_output=True)
+        if result.returncode:
+            raise SystemExit('Runner registration failed: '+(result.stdout+result.stderr).replace(token,'[REDACTED]'))
+        print(repo+': environments, restricted deployment keys, and self-hosted runner configured')
+    print('GitHub deployment configuration complete; no VPN credentials required.')
 
 
 if __name__=='__main__': main()

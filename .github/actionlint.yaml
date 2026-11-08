@@ -1,0 +1,6 @@
+self-hosted-runner:
+  labels:
+    - ktcn-deploy
+    - ktcn-backend
+    - ktcn-admin
+    - ktcn-frontend

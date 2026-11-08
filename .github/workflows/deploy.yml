@@ -30,7 +30,7 @@ jobs:
       - name: Verify deployment guards and Python syntax
         run: |
           python3 -m compileall -q app
-          python3 -m unittest discover -s deploy -p test_deploy.py -v
+          python3 -m unittest discover -s deploy -p 'test_*.py' -v
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         if: github.event_name != 'pull_request'
@@ -71,7 +71,7 @@ jobs:
     needs: build
     outputs:
       release: ${{ steps.deploy.outputs.release }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, ktcn-deploy, ktcn-backend]
     timeout-minutes: 15
     permissions:
       contents: read
@@ -84,19 +84,10 @@ jobs:
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-          TS_CLIENT: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          TS_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
         run: |
-          for name in SSH_KEY SSH_KNOWN_HOSTS TS_CLIENT TS_SECRET; do
+          for name in SSH_KEY SSH_KNOWN_HOSTS; do
             test -n "${!name}" || { echo "Missing staging secret: $name"; exit 1; }
           done
-      - name: Connect to Tailscale
-        uses: tailscale/github-action@v4
-        with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: tag:ktcn-ci
-          ping: 100.122.190.92
       - name: Deploy immutable test image
         id: deploy
         env:
@@ -110,10 +101,10 @@ jobs:
           COMMIT: ${{ github.sha }}
         run: |
           umask 077
-          mkdir -p ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/ktcn_deploy
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          trap 'rm -f ~/.ssh/ktcn_deploy "$RUNNER_TEMP/deploy.json"' EXIT
+          mkdir -p "$RUNNER_TEMP/ktcn-ssh"
+          printf '%s\n' "$SSH_KEY" > "$RUNNER_TEMP/ktcn-ssh/key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/ktcn-ssh/known_hosts"
+          trap 'rm -f "$RUNNER_TEMP/ktcn-ssh/key" "$RUNNER_TEMP/deploy.json"' EXIT
           python3 - <<'PYTHON' > "$RUNNER_TEMP/deploy.json"
           import json, os
           e = os.environ
@@ -122,7 +113,7 @@ jobs:
             "production":"ghcr.io/"+e["REPOSITORY"]+"@"+e["PRODUCTION_DIGEST"],
             "registry_user":e["REGISTRY_USER"], "registry_token":e["REGISTRY_TOKEN"]}))
           PYTHON
-          ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20             -i ~/.ssh/ktcn_deploy admin@100.122.190.92 deploy             < "$RUNNER_TEMP/deploy.json" | tee "$RUNNER_TEMP/deploy.log"
+          ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20             -i "$RUNNER_TEMP/ktcn-ssh/key" -o HostKeyAlias=100.122.190.92 -o UserKnownHostsFile="$RUNNER_TEMP/ktcn-ssh/known_hosts" admin@127.0.0.1 deploy             < "$RUNNER_TEMP/deploy.json" | tee "$RUNNER_TEMP/deploy.log"
           release=$(sed -n 's/^RELEASE_ID=//p' "$RUNNER_TEMP/deploy.log")
           echo "release=$release" >> "$GITHUB_OUTPUT"
           rm -f "$RUNNER_TEMP/deploy.json"
@@ -152,19 +143,12 @@ jobs:
       group: ktcn-production
       cancel-in-progress: false
     needs: [deploy-test, verify-approval-policy]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, ktcn-deploy, ktcn-backend]
     timeout-minutes: 20
     environment:
       name: production
       url: https://ktcn.itup.io.vn/vi
     steps:
-      - name: Connect to Tailscale
-        uses: tailscale/github-action@v4
-        with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: tag:ktcn-ci
-          ping: 100.122.190.92
       - name: Deploy approved release
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -177,10 +161,10 @@ jobs:
           set -euo pipefail
           test -n "$SSH_KEY" && test -n "$SSH_KNOWN_HOSTS"
           umask 077
-          mkdir -p ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/ktcn_deploy
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          trap 'rm -f ~/.ssh/ktcn_deploy "$RUNNER_TEMP/deploy.json"' EXIT
+          mkdir -p "$RUNNER_TEMP/ktcn-ssh"
+          printf '%s\n' "$SSH_KEY" > "$RUNNER_TEMP/ktcn-ssh/key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/ktcn-ssh/known_hosts"
+          trap 'rm -f "$RUNNER_TEMP/ktcn-ssh/key" "$RUNNER_TEMP/deploy.json"' EXIT
           python3 - <<'PYTHON' > "$RUNNER_TEMP/deploy.json"
           import json, os
           e = os.environ
@@ -188,5 +172,5 @@ jobs:
             "registry_user":e["REGISTRY_USER"],"registry_token":e["REGISTRY_TOKEN"]}))
           PYTHON
           ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
-            -i ~/.ssh/ktcn_deploy admin@100.122.190.92 deploy < "$RUNNER_TEMP/deploy.json"
+            -i "$RUNNER_TEMP/ktcn-ssh/key" -o HostKeyAlias=100.122.190.92 -o UserKnownHostsFile="$RUNNER_TEMP/ktcn-ssh/known_hosts" admin@127.0.0.1 deploy < "$RUNNER_TEMP/deploy.json"
           printf 'Production operation succeeded: `%s`\n' "$RELEASE" >> "$GITHUB_STEP_SUMMARY"

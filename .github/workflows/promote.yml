@@ -36,19 +36,12 @@ jobs:
             | grep -Eq '^[1-9][0-9]*$'
   deploy:
     needs: verify-approval-policy
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, ktcn-deploy, ktcn-backend]
     timeout-minutes: 20
     environment:
       name: production
       url: https://ktcn.itup.io.vn/vi
     steps:
-      - name: Connect to Tailscale
-        uses: tailscale/github-action@v4
-        with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: tag:ktcn-ci
-          ping: 100.122.190.92
       - name: Deploy approved release
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -61,10 +54,10 @@ jobs:
           set -euo pipefail
           test -n "$SSH_KEY" && test -n "$SSH_KNOWN_HOSTS"
           umask 077
-          mkdir -p ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/ktcn_deploy
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          trap 'rm -f ~/.ssh/ktcn_deploy "$RUNNER_TEMP/deploy.json"' EXIT
+          mkdir -p "$RUNNER_TEMP/ktcn-ssh"
+          printf '%s\n' "$SSH_KEY" > "$RUNNER_TEMP/ktcn-ssh/key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/ktcn-ssh/known_hosts"
+          trap 'rm -f "$RUNNER_TEMP/ktcn-ssh/key" "$RUNNER_TEMP/deploy.json"' EXIT
           python3 - <<'PYTHON' > "$RUNNER_TEMP/deploy.json"
           import json, os
           e = os.environ
@@ -72,5 +65,5 @@ jobs:
             "registry_user":e["REGISTRY_USER"],"registry_token":e["REGISTRY_TOKEN"]}))
           PYTHON
           ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
-            -i ~/.ssh/ktcn_deploy admin@100.122.190.92 deploy < "$RUNNER_TEMP/deploy.json"
+            -i "$RUNNER_TEMP/ktcn-ssh/key" -o HostKeyAlias=100.122.190.92 -o UserKnownHostsFile="$RUNNER_TEMP/ktcn-ssh/known_hosts" admin@127.0.0.1 deploy < "$RUNNER_TEMP/deploy.json"
           printf 'Production operation succeeded: `%s`\n' "$RELEASE" >> "$GITHUB_STEP_SUMMARY"

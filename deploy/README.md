@@ -20,8 +20,10 @@ opens a **production approval** job. Review the test website and admin, then cho
 **Review deployments → Approve and deploy**. A preflight rejects production if its
 GitHub environment has no required reviewer. If a newer test deployment occurs
 while approval is pending, the old release cannot be promoted: review the newest
-release instead. SSH keys are restricted to their component or production command;
-test keys cannot deploy production.
+release instead. Deploy jobs run on dedicated self-hosted runners on webdeploy, then connect to
+127.0.0.1 through SSH. SSH keys are restricted to their component or production
+command; test keys cannot deploy production. No VPN, external SSH route, or
+Tailscale credentials are required by GitHub Actions.
 
 ## Server layout
 
@@ -44,7 +46,7 @@ keys are not copied to test. Test containers have memory limits.
 ## Domain routing
 
 Configure these HTTPS routes on the existing proxy/tunnel. The upstream host is
-`100.122.190.92` from a peer on Tailscale, or `10.10.10.100` from the host LAN:
+`100.122.190.92` from an existing management network, or `10.10.10.100` from the host LAN:
 
 | Hostname | Upstream port |
 |---|---:|
@@ -73,20 +75,48 @@ from search indexing. Production routes remain on ports 3002 / 5177 / 8000.
 4. Pin the verified host key in `~/.config/ktcn-deploy/known_hosts`.
    Verified ED25519 fingerprint at setup:
    `SHA256:h3zMtXFTMp2DVn3V2CTI9d2wUlw4a9TzyCpTXgeuB6c`.
-5. Create a Tailscale OAuth client with Auth Keys write scope and tag `tag:ktcn-ci`.
-   Tailnet policy must allow that tag to reach the server on TCP 22. Set
-   `TS_OAUTH_CLIENT_ID` and `TS_OAUTH_SECRET` in the local shell, or store
-   `{"client_id":"...","client_secret":"..."}` in
-   `~/.config/ktcn-deploy/tailscale.json` with mode 0600. Never commit it.
-6. Run `gh auth login` as the repository owner, then
-   `python3 deploy/configure-github.py` locally. It creates staging/production
-   environments in all three repos, limits them to main, installs SSH secrets,
-   requires owner approval for production and disables admin bypass. Self-review
-   remains allowed so the owner can approve their own release.
-7. Configure the four test DNS/proxy routes above. Merge the workflow changes into
+5. Install the three runner accounts and systemd units on the host:
+   `sudo python3 /home/admin/KTCT/deploy/bin/install-runners.py`.
+   The official Linux AMD64 release archive is verified against its SHA256 digest
+   from the GitHub release API before extraction. Runners use distinct system users
+   under `/var/lib/ktcn-runners`, without Docker/admin membership. Services restrict
+   filesystem writes to their own directories and hide `/home`.
+6. Generate a separate local key pair `~/.config/ktcn-deploy/runner-register`.
+   Add its public key to admin's authorized_keys with:
+   `restrict,command="sudo -n /usr/bin/python3 /opt/ktcn-runner-tools/register-runner.py"`.
+   The root-owned registration tool only accepts one of the three known components
+   and a short-lived GitHub registration token; it cannot execute arbitrary commands.
+7. Run `gh auth login` as the repository owner, then
+   `python3 deploy/configure-github.py` locally. This creates staging/production
+   environments and main-only branch policies, installs the existing SSH secrets,
+   requires owner approval for production, disables admin bypass, and registers
+   each repo runner using a one-hour registration token sent over the existing
+   management connection. No long-lived personal GitHub token is stored on the
+   server. Owner self-review is allowed.
+8. Configure the four test DNS/proxy routes above. Merge the workflow changes into
    main. After the three first builds complete, their deployment jobs populate
    test. An initial backend container from the running host image, if present,
    is only a bootstrap diagnostic and cannot form an approved release manifest.
+
+## Runner execution policy
+
+Builds, pull requests, and the reviewer-policy check run on GitHub-hosted machines.
+Only deployment jobs use `[self-hosted, linux, x64, ktcn-deploy, ktcn-<component>]`.
+Each native runner has a root-owned pre-job hook outside its writable application
+folder. The hook accepts only its exact repository, main ref, push/manual-dispatch
+origin, expected workflow path, and deploy job IDs. It rejects PR and
+pull_request_target events, other branches, arbitrary workflows, and build jobs
+before their steps execute. This supplements the main-only environments and
+production approval. Services use separate unprivileged users, filesystem
+restrictions, memory/CPU limits and no Docker socket access. Maintain trust in
+main-branch workflow changes and repository administrators.
+
+Runner services are `ktcn-runner-backend`, `ktcn-runner-frontend`, and
+`ktcn-runner-admin`. Inspect with `systemctl status <name>` or
+`journalctl -u <name>`. They remain inactive until registered. The native runner
+application updates itself through GitHub; deployments still run preinstalled
+host scripts, rather than checking out and executing application source on the
+runner. Root-owned guard/service changes require explicit host administration.
 
 GHCR credentials from each repository's `GITHUB_TOKEN` are used transiently on the
 server to cache both variants. Production normally uses these cached digests.
@@ -122,7 +152,7 @@ blue/green deployment. Backup, release and image retention are manual initially.
 Run deployment guard tests:
 
 ```sh
-python3 -m unittest discover -s deploy -p test_deploy.py -v
+python3 -m unittest discover -s deploy -p 'test_*.py' -v
 ```
 
 Validate workflows with actionlint. Builds run in GitHub-hosted Linux AMD64
@@ -133,4 +163,5 @@ host; login details are stored at `staging/admin-login.json` with mode 0600.
 Production users are not copied during bootstrap.
 
 References: [GitHub environments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments),
-[Tailscale GitHub Action](https://tailscale.com/docs/integrations/github/github-action).
+[Self-hosted runner communication](https://docs.github.com/en/actions/reference/runners/self-hosted-runners#communication),
+[Pre-job hooks](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/run-scripts).
