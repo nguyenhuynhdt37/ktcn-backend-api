@@ -1,0 +1,60 @@
+name: ktcn-test
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    env_file: db.env
+    volumes: [test_postgres:/var/lib/postgresql/data]
+    mem_limit: 384m
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U postgres -d university_cms_test']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: [redis-server, --maxmemory, 64mb, --maxmemory-policy, allkeys-lru]
+    volumes: [test_redis:/data]
+    mem_limit: 96m
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address :9001
+    env_file: minio.env
+    volumes: [test_minio:/data]
+    ports: ['19000:9000']
+    mem_limit: 256m
+  backend:
+    image: ${BACKEND_IMAGE:?Set BACKEND_IMAGE}
+    restart: unless-stopped
+    env_file: backend.env
+    ports: ['18000:8000']
+    mem_limit: 512m
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+  frontend:
+    image: ${FRONTEND_IMAGE:?Set FRONTEND_IMAGE}
+    restart: unless-stopped
+    environment:
+      API_URL: http://backend:8000
+      NEXT_PUBLIC_API_URL: https://test-api-ktcn.itup.io.vn
+      NEXT_PUBLIC_SITE_URL: https://test-ktcn.itup.io.vn
+      HOSTNAME: 0.0.0.0
+    ports: ['13002:3000']
+    mem_limit: 384m
+  admin:
+    image: ${ADMIN_IMAGE:?Set ADMIN_IMAGE}
+    restart: unless-stopped
+    ports: ['15177:80']
+    mem_limit: 64m
+volumes:
+  test_postgres:
+  test_redis:
+  test_minio:
