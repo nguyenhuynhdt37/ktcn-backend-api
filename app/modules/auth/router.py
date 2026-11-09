@@ -9,7 +9,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.exceptions import TooManyRequestsException, UnauthorizedException, ForbiddenException
 from app.core.security import decode_access_token
-from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.dependencies import get_current_user, require_admin, require_self_or_admin
 from app.modules.auth.models import User
 from app.shared.rate_limiter import check_rate_limit
 from app.shared.redis import get_redis
@@ -356,6 +356,7 @@ async def get_user_detail(
     """
     Lấy thông tin chi tiết một thành viên theo ID.
     """
+    require_self_or_admin(current_user, user_id)
     user = await auth_service.get_user_detail(db, user_id)
     return UserDetailResponse.model_validate(user)
 
@@ -440,6 +441,7 @@ async def get_user_sessions(
     Lấy danh sách tất cả phiên đăng nhập (còn hạn) của một tài khoản.
     Bao gồm cả phiên đang hoạt động và đã bị thu hồi.
     """
+    require_self_or_admin(current_user, user_id)
     return await auth_service.get_user_sessions(db, user_id)
 
 
@@ -456,6 +458,7 @@ async def get_login_history(
     Lấy lịch sử đăng nhập có phân trang của một tài khoản.
     Có thể lọc theo trạng thái: 'success' hoặc 'failed'.
     """
+    require_self_or_admin(current_user, user_id)
     return await auth_service.get_login_history(
         db, user_id, page=page, page_size=page_size, status=status
     )
@@ -471,6 +474,7 @@ async def revoke_user_session(
     """
     Thu hồi (đăng xuất từ xa) một phiên đăng nhập cụ thể của người dùng.
     """
+    require_self_or_admin(current_user, user_id)
     await auth_service.revoke_user_session(db, user_id, session_id)
     return {"success": True}
 
@@ -484,6 +488,7 @@ async def revoke_all_user_sessions(
     """
     Thu hồi tất cả phiên đăng nhập đang hoạt động của người dùng.
     """
+    require_self_or_admin(current_user, user_id)
     revoked_count = await auth_service.revoke_all_user_sessions(db, user_id)
     return {"success": True, "revoked_count": revoked_count}
 
@@ -492,7 +497,7 @@ async def revoke_all_user_sessions(
 async def lock_user(
     request: Request,
     user_id: uuid.UUID,
-    current_user: UserResponse = Depends(get_current_user),
+    current_user: UserResponse = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> LockUserResponse:
     """
@@ -508,7 +513,7 @@ async def lock_user(
 async def unlock_user(
     request: Request,
     user_id: uuid.UUID,
-    current_user: UserResponse = Depends(get_current_user),
+    current_user: UserResponse = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> LockUserResponse:
     """
@@ -530,4 +535,5 @@ async def get_anomaly_report(
     Tạo báo cáo phát hiện hành vi bất thường cho một tài khoản.
     Phân tích: brute-force, IP mới, giờ đăng nhập bất thường, quá nhiều phiên.
     """
+    require_self_or_admin(current_user, user_id)
     return await auth_service.get_anomaly_report(db, user_id)

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
 from app.core.database import get_db
-from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.dependencies import get_current_user, require_admin
 from app.modules.auth.schemas import UserResponse
 from app.modules.ai_hub.schemas import (
     AISettingsUpdateRequest,
@@ -81,7 +81,7 @@ async def get_ai_models(
 )
 async def update_ai_settings(
     payload: AISettingsUpdateRequest,
-    current_user: UserResponse = Depends(get_current_user),
+    current_user: UserResponse = Depends(require_admin),
 ) -> dict[str, str]:
     """
     Cập nhật model active (chat hoặc embedding) được chọn để sử dụng cho toàn bộ hệ thống.
@@ -111,7 +111,7 @@ async def get_ai_logs(
     user_id: Optional[uuid.UUID] = Query(None),
     model_type: Optional[str] = Query(None, enum=["chat", "embedding"]),
     db: AsyncSession = Depends(get_db),
-    current_user: UserResponse = Depends(get_current_user),
+    current_user: UserResponse = Depends(require_admin),
 ) -> AILogListResponse:
     """
     Lấy danh sách nhật ký cuộc gọi AI có phân trang và bộ lọc.
@@ -143,7 +143,7 @@ async def get_ai_spend(
     period: str = Query("day", enum=["day", "month", "year", "all"]),
     model_type: Optional[str] = Query(None, enum=["chat", "embedding"]),
     db: AsyncSession = Depends(get_db),
-    current_user: UserResponse = Depends(get_current_user),
+    current_user: UserResponse = Depends(require_admin),
 ) -> AISpendResponse:
     """
     Lấy dữ liệu thống kê chi tiêu (Spend Analytics) theo thời gian (ngày, tháng, năm, toàn bộ)

@@ -23,12 +23,17 @@ def resolve_avatar_url(avatar_url: Optional[str]) -> Optional[str]:
     return f"{protocol}://{settings.MINIO_ENDPOINT}/{settings.MINIO_BUCKET}/{avatar_url}"
 
 from app.core.database import get_db
-from app.core.exceptions import UnauthorizedException
+from app.core.exceptions import ForbiddenException, UnauthorizedException
 from app.core.security import decode_access_token
 from app.modules.auth.models import User
 from app.modules.auth.schemas import TokenPayload, UserResponse
 
 reusable_oauth2_optional = HTTPBearer(auto_error=False)
+
+
+def require_self_or_admin(current_user: UserResponse, user_id: uuid.UUID) -> None:
+    if current_user.id != user_id and not current_user.is_admin:
+        raise ForbiddenException(message="Bạn không có quyền truy cập tài khoản này")
 
 
 def resolve_user_access(user: User) -> tuple[list[str], bool]:
@@ -161,3 +166,11 @@ async def get_current_user(
         is_active=user.is_active,
         is_admin=is_admin,
     )
+
+
+async def require_admin(
+    current_user: UserResponse = Depends(get_current_user),
+) -> UserResponse:
+    if not current_user.is_admin:
+        raise ForbiddenException(message="Thao tác này yêu cầu quyền quản trị viên")
+    return current_user

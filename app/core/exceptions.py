@@ -126,7 +126,7 @@ async def validation_exception_handler(
         loc = ".".join(str(x) for x in error.get("loc", []))
         details[loc] = error.get("msg")
     
-    logger.error(f"422 Validation Error: {details} | Payload: {exc.body}")
+    logger.error(f"422 Validation Error: {details}")
 
     return JSONResponse(
         status_code=422,

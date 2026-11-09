@@ -15,7 +15,12 @@ from app.modules.auth.schemas import UserResponse
 def _make_serializable(data: Any) -> Any:
     """Helper đệ quy chuyển đổi UUID và Datetime trong dict thành string để lưu vào JSON column."""
     if isinstance(data, dict):
-        return {k: _make_serializable(v) for k, v in data.items()}
+        sensitive = {"password", "password_hash", "current_password", "new_password",
+                     "access_token", "refresh_token", "token", "secret", "api_key"}
+        return {
+            k: "[REDACTED]" if k.lower() in sensitive else _make_serializable(v)
+            for k, v in data.items()
+        }
     elif isinstance(data, list):
         return [_make_serializable(x) for x in data]
     elif isinstance(data, uuid.UUID):

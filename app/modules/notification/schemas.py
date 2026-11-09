@@ -1,7 +1,9 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from urllib.parse import urlsplit
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.notification.models import NotificationType
 
@@ -47,9 +49,24 @@ class PushSubscriptionKeys(BaseModel):
 
 
 class PushSubscriptionCreate(BaseModel):
-    endpoint: str
+    endpoint: str = Field(max_length=2048)
     keys: PushSubscriptionKeys
     user_agent: str | None = None
+
+    @field_validator("endpoint")
+    @classmethod
+    def validate_push_endpoint(cls, value: str) -> str:
+        # Only browser push services may receive server-side webpush requests.
+        url = urlsplit(value)
+        host = url.hostname or ""
+        allowed = host in {"fcm.googleapis.com", "updates.push.services.mozilla.com", "web.push.apple.com"}
+        allowed = allowed or host.endswith(".notify.windows.com")
+        if (
+            url.scheme != "https" or not allowed or url.port not in {None, 443}
+            or url.username or url.password or url.fragment
+        ):
+            raise ValueError("Endpoint must use an approved HTTPS browser push service")
+        return value
 
 
 class PushSubscriptionUnsubscribe(BaseModel):

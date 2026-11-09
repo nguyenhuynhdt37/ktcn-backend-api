@@ -1,6 +1,7 @@
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.core.config import settings
 
@@ -36,39 +37,46 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-class RequestSizeLimiterMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware to limit the maximum allowed content size of HTTP requests.
-    Prevents Denial of Service (DoS) attacks via massive payloads.
-    """
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
-        # Check Content-Length header first
-        content_length = request.headers.get("content-length")
-        
-        if content_length:
-            try:
-                size = int(content_length)
+class RequestSizeLimiterMiddleware:
+    """Bound actual received bytes before parsers or business handlers run."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        length = dict(scope["headers"]).get(b"content-length")
+        try:
+            declared = int(length) if length is not None else 0
+            if declared < 0:
+                raise ValueError
+        except ValueError:
+            await JSONResponse({"error": {"code": "BAD_REQUEST"}}, status_code=400)(scope, receive, send)
+            return
+
+        chunks = []
+        size = 0
+        if declared <= settings.MAX_CONTENT_LENGTH:
+            while True:
+                message = await receive()
+                if message["type"] == "http.disconnect":
+                    return
+                size += len(message.get("body", b""))
                 if size > settings.MAX_CONTENT_LENGTH:
-                    return JSONResponse(
-                        status_code=413,
-                        content={
-                            "error": {
-                                "code": "PAYLOAD_TOO_LARGE",
-                                "message": f"Payload size exceeds the limit of {settings.MAX_CONTENT_LENGTH // (1024 * 1024)}MB."
-                            }
-                        }
-                    )
-            except ValueError:
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "error": {
-                            "code": "BAD_REQUEST",
-                            "message": "Invalid Content-Length header."
-                        }
-                    }
-                )
-                
-        return await call_next(request)
+                    break
+                chunks.append(message)
+                if not message.get("more_body", False):
+                    iterator = iter(chunks)
+
+                    async def replay() -> dict:
+                        return next(iterator, None) or await receive()
+
+                    await self.app(scope, replay, send)
+                    return
+
+        await JSONResponse(
+            {"error": {"code": "PAYLOAD_TOO_LARGE", "message": "Request body exceeds the configured limit"}},
+            status_code=413,
+        )(scope, receive, send)

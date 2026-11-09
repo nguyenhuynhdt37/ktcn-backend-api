@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, status
 from app.core.config import settings
-from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.dependencies import get_current_user, require_admin
 from app.modules.auth.schemas import UserResponse
 from app.modules.translation.exceptions import BatchSizeExceededException
 from app.modules.translation.schemas import (
@@ -112,7 +112,7 @@ async def get_ai_models(
 )
 async def update_ai_settings(
     payload: AISettingsUpdateRequest,
-    current_user: UserResponse = Depends(get_current_user),
+    current_user: UserResponse = Depends(require_admin),
 ) -> dict[str, str]:
     """
     Cập nhật model active được chọn để sử dụng cho toàn bộ hệ thống.
