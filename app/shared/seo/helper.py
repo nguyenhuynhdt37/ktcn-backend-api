@@ -47,7 +47,7 @@ def resolve_seo(
     if custom_seo_title and custom_seo_title.strip():
         resolved_title = custom_seo_title.strip()
     else:
-        resolved_title = f"{title.strip()} | Trường Kỹ thuật và Công nghệ - Đại học Vinh"
+        resolved_title = f"{title.strip()} | Trường Kỹ thuật và Công nghệ - Trường Đại Học Vinh"
 
     # ─── 2. SEO DESCRIPTION ───
     if custom_seo_description and custom_seo_description.strip():
@@ -64,7 +64,7 @@ def resolve_seo(
             resolved_desc = clean_content[:155] + "..." if len(clean_content) > 155 else clean_content
         # c. Sử dụng mô tả mặc định của website
         else:
-            resolved_desc = "Trang thông tin chính thức của Trường Kỹ thuật và Công nghệ - Đại học Vinh."
+            resolved_desc = "Trang thông tin chính thức của Trường Kỹ thuật và Công nghệ - Trường Đại Học Vinh."
 
     # ─── 3. SEO KEYWORDS ───
     if custom_seo_keywords and custom_seo_keywords.strip():

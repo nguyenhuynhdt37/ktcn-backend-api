@@ -117,7 +117,7 @@ async def seed_footer():
                         "sort_order": 1
                     },
                     {
-                        "titles": {"vi": "Cổng thông tin Đại học Vinh", "en": "Vinh University Portal"},
+                        "titles": {"vi": "Cổng thông tin Trường Đại Học Vinh", "en": "Vinh University Portal"},
                         "target_type": MenuItemTargetType.EXTERNAL_LINK,
                         "external_url": "https://vinhuni.edu.vn",
                         "sort_order": 2
