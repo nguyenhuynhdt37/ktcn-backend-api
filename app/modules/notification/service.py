@@ -453,10 +453,12 @@ class NotificationService:
                 
             logger.info(f"Sending Web Push Notification to {len(subscriptions)} devices")
             
-            for sub in subscriptions:
+            semaphore = asyncio.Semaphore(20)
+
+            async def push_one(sub: Any) -> None:
                 # Bỏ qua các thiết bị test giả lập để không spam log lỗi
                 if "test-device" in sub.endpoint:
-                    continue
+                    return
                     
                 try:
                     def perform_push():
@@ -476,10 +478,12 @@ class NotificationService:
                             vapid_private_key=private_key,
                             vapid_claims={
                                 "sub": f"mailto:{settings.VAPID_CLAIM_EMAIL}"
-                            }
+                            },
+                            timeout=10
                         )
                     
-                    await asyncio.to_thread(perform_push)
+                    async with semaphore:
+                        await asyncio.to_thread(perform_push)
                 except WebPushException as ex:
                     logger.warning(f"WebPush failed for endpoint {sub.endpoint}: {ex}")
                     if ex.response is not None and ex.response.status_code in (404, 410):
@@ -488,6 +492,7 @@ class NotificationService:
                 except Exception as ex:
                     logger.error(f"Unexpected error during push: {ex}")
                     
+            await asyncio.gather(*(push_one(sub) for sub in subscriptions))
             await db.commit()
 
 

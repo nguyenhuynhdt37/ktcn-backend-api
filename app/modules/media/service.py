@@ -1,6 +1,8 @@
 import hashlib
 import io
+import re
 import uuid
+from urllib.parse import quote
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 import boto3
@@ -14,6 +16,86 @@ from anyio.to_thread import run_sync
 from app.core.config import settings
 from app.core.exceptions import BadRequestException, NotFoundException
 from app.modules.media.models import MediaItem
+
+
+# Content types a browser executes as a document/script. Served from the API
+# origin they would run with the admin's session, so they are never accepted.
+ACTIVE_CONTENT_TYPES = frozenset({
+    "text/html",
+    "application/xhtml+xml",
+    "text/xml",
+    "application/xml",
+    "text/javascript",
+    "application/javascript",
+    "application/x-javascript",
+    "application/ecmascript",
+    "text/ecmascript",
+    "text/css",
+    "text/xsl",
+    "application/xslt+xml",
+    "application/x-shockwave-flash",
+    "application/x-httpd-php",
+    "message/rfc822",
+    "multipart/x-mixed-replace",
+})
+
+# Types that are safe to render inline when requested through the API origin.
+INLINE_SAFE_CONTENT_TYPES = frozenset({
+    "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif",
+    "image/bmp", "image/x-icon", "image/vnd.microsoft.icon", "image/svg+xml",
+    "application/pdf",
+    "video/mp4", "video/webm", "video/ogg",
+    "audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/webm",
+})
+
+SVG_DANGEROUS_PATTERN = re.compile(
+    r"<\s*(script|foreignobject|iframe|embed|object|handler|listener)\b"  # active elements
+    r"|\bon[a-z]+\s*="                 # any event handler (onload, onbegin, ...)
+    r"|(javascript|vbscript)\s*:"       # script URLs
+    r"|data\s*:\s*text/html"            # embedded HTML documents
+    r"|<!entity",                       # XML entity tricks
+)
+
+
+def normalize_content_type(content_type: str | None) -> str:
+    return (content_type or "").split(";")[0].strip().lower()
+
+
+def is_active_content_type(content_type: str | None) -> bool:
+    normalized = normalize_content_type(content_type)
+    if normalized == "image/svg+xml":
+        return False  # allowed, but scanned on upload and sandboxed when served
+    return normalized in ACTIVE_CONTENT_TYPES or normalized.endswith(("+xml", "html"))
+
+
+def build_content_disposition(filename: str | None, disposition: str = "attachment") -> str:
+    """RFC 6266 header value that survives non-ASCII (Vietnamese) file names."""
+    name = (filename or "download").replace("\r", " ").replace("\n", " ")
+    ascii_fallback = (
+        name.encode("ascii", "ignore").decode("ascii").replace("\\", "_").replace('"', "_").strip()
+        or "download"
+    )
+    return f"{disposition}; filename=\"{ascii_fallback}\"; filename*=UTF-8''{quote(name, safe='')}"
+
+
+def build_public_media_headers(content_type: str | None) -> tuple[str, dict[str, str]]:
+    """
+    Decide how a stored object may be returned from the API origin.
+    Anything that is not a known passive type is forced to download as an
+    opaque binary, and SVG is sandboxed so embedded script can never run with
+    the origin's cookies.
+    """
+    normalized = normalize_content_type(content_type) or "application/octet-stream"
+    headers = {"X-Content-Type-Options": "nosniff"}
+    if normalized not in INLINE_SAFE_CONTENT_TYPES:
+        headers["Content-Disposition"] = "attachment"
+        headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
+        return "application/octet-stream", headers
+    if normalized == "image/svg+xml":
+        headers["Content-Security-Policy"] = (
+            "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+        )
+    return normalized, headers
 
 
 def validate_magic_bytes(content: bytes, content_type: str) -> bool:
@@ -30,6 +112,8 @@ def validate_magic_bytes(content: bytes, content_type: str) -> bool:
         return content.startswith(b"\xff\xd8\xff")
     elif content_type.startswith("image/gif"):
         return content.startswith(b"GIF87a") or content.startswith(b"GIF89a")
+    elif content_type.startswith("image/webp"):
+        return content[:4] == b"RIFF" and content[8:12] == b"WEBP"
     elif content_type == "application/pdf":
         return content.startswith(b"%PDF")
     elif content_type == "image/svg+xml" or content_type.endswith("svg+xml"):
@@ -48,15 +132,10 @@ def check_svg_safety(content: bytes) -> bool:
     Scans SVG content for potential XSS payloads like script tags or onload attributes.
     """
     try:
+        if content[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            return False  # UTF-16 would hide markup from the scan below
         text = content.decode("utf-8", errors="ignore").lower()
-        dangerous_patterns = [
-            "<script", "javascript:", "onload=", "onerror=", 
-            "onclick=", "onmouseover=", "onfocus=", "onblur="
-        ]
-        for pattern in dangerous_patterns:
-            if pattern in text:
-                return False
-        return True
+        return SVG_DANGEROUS_PATTERN.search(text) is None
     except Exception:
         return False
 
@@ -194,6 +273,13 @@ class MediaService:
             await self._verify_parent_exists_and_is_folder(db, parent_id)
 
         # 0. Security Validations
+        content_type = normalize_content_type(content_type) or "application/octet-stream"
+        if is_active_content_type(content_type):
+            raise BadRequestException(
+                message="Định dạng tập tin này không được phép tải lên.",
+                error_code="UNSUPPORTED_FILE_TYPE",
+            )
+
         # Validate Magic Bytes (File Signatures)
         if not validate_magic_bytes(file_content, content_type):
             raise BadRequestException(
@@ -569,6 +655,14 @@ class MediaService:
         """
         Generates S3 Presigned POST URL for direct client S3 file uploads.
         """
+        content_type = normalize_content_type(content_type)
+        if not content_type or is_active_content_type(content_type) or content_type == "image/svg+xml":
+            # SVG cần được quét nội dung nên phải đi qua endpoint /upload
+            raise BadRequestException(
+                message="Định dạng tập tin này không được phép tải lên trực tiếp.",
+                error_code="UNSUPPORTED_FILE_TYPE",
+            )
+        expires_in = max(60, min(int(expires_in), 3600))
         object_key = f"files/{uuid.uuid4().hex}"
         
         response = await run_sync(
@@ -578,7 +672,9 @@ class MediaService:
                 Fields={"Content-Type": content_type},
                 Conditions=[
                     {"Content-Type": content_type},
-                    ["starts-with", "$key", "files/"]
+                    ["starts-with", "$key", "files/"],
+                    # Cùng giới hạn dung lượng với upload qua API
+                    ["content-length-range", 1, settings.MAX_CONTENT_LENGTH],
                 ],
                 ExpiresIn=expires_in
             )
@@ -602,6 +698,7 @@ class MediaService:
                 error_code="DIRECTORY_PRESIGNED_ERROR",
             )
 
+        expires_in = max(60, min(int(expires_in), 3600))
         url = await run_sync(
             lambda: self.s3_client.generate_presigned_url(
                 ClientMethod="get_object",

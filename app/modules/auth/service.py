@@ -2,7 +2,7 @@ import uuid
 from typing import Tuple, List, Optional
 from datetime import datetime, timezone, timedelta
 from fastapi import Request
-from sqlalchemy import select, delete, func, desc
+from sqlalchemy import select, delete, func, desc, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -81,6 +81,33 @@ class AuthService:
         db.add(new_rt)
         await db.commit()
 
+        return Token(access_token=access_token), refresh_token
+
+    async def issue_session(
+        self, db: AsyncSession, user_id: uuid.UUID, ip_address: str, user_agent: Optional[str]
+    ) -> Tuple[Token, str]:
+        """
+        Thu hồi mọi refresh token cũ và cấp một phiên mới cho thiết bị hiện tại.
+        Dùng sau khi đổi mật khẩu để người dùng không bị văng khỏi phiên đang dùng.
+        """
+        await db.execute(
+            update(RefreshToken)
+            .where(RefreshToken.user_id == user_id, RefreshToken.is_revoked == False)
+            .values(is_revoked=True)
+        )
+        access_token = create_access_token(
+            subject=str(user_id),
+            expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
+        )
+        refresh_token = str(uuid.uuid4())
+        db.add(RefreshToken(
+            user_id=user_id,
+            token_hash=hash_token(refresh_token),
+            expires_at=datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+            ip_address=ip_address,
+            user_agent=user_agent,
+        ))
+        await db.commit()
         return Token(access_token=access_token), refresh_token
 
     async def _log_login_attempt(
@@ -202,7 +229,8 @@ class AuthService:
         await db.commit()
 
     async def get_users_page(
-        self, db: AsyncSession, page: int, page_size: int, search: Optional[str] = None, is_active: Optional[bool] = None, is_deleted: bool = False
+        self, db: AsyncSession, page: int, page_size: int, search: Optional[str] = None, is_active: Optional[bool] = None, is_deleted: bool = False,
+        search_contact: bool = True,
     ):
         if is_deleted:
             query = select(User).where(User.deleted_at != None).options(selectinload(User.avatar))
@@ -210,7 +238,10 @@ class AuthService:
             query = select(User).where(User.deleted_at == None).options(selectinload(User.avatar))
 
         if search:
-            query = query.where(User.username.ilike(f"%{search}%") | User.email.ilike(f"%{search}%") | User.full_name.ilike(f"%{search}%"))
+            condition = User.username.ilike(f"%{search}%") | User.full_name.ilike(f"%{search}%")
+            if search_contact:
+                condition = condition | User.email.ilike(f"%{search}%")
+            query = query.where(condition)
         
         if is_active is not None:
             query = query.where(User.is_active == is_active)
@@ -262,10 +293,23 @@ class AuthService:
             update_data.pop("is_admin", None)
             update_data.pop("is_active", None)
 
-        # Xử lý cấp lại mật khẩu
+        # Xử lý cấp lại mật khẩu: chỉ Admin. Người dùng thường phải đổi qua
+        # /admin/profile/password (bắt buộc nhập đúng mật khẩu hiện tại).
         password = update_data.pop("password", None)
         if password is not None:
+            if not current_user.is_admin:
+                raise ForbiddenException(
+                    message="Vui lòng dùng chức năng đổi mật khẩu trong hồ sơ cá nhân (cần nhập mật khẩu hiện tại)",
+                    error_code="CURRENT_PASSWORD_REQUIRED",
+                )
             user.password_hash = hash_password(password)
+            # Vô hiệu hoá mọi phiên/tokens đã cấp trước thời điểm cấp lại mật khẩu
+            user.password_changed_at = datetime.now(timezone.utc)
+            await db.execute(
+                update(RefreshToken)
+                .where(RefreshToken.user_id == user.id, RefreshToken.is_revoked == False)
+                .values(is_revoked=True)
+            )
 
         for key, value in update_data.items():
             setattr(user, key, value)

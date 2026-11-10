@@ -1,4 +1,5 @@
 import uuid
+from datetime import timezone
 from typing import Optional
 import jwt
 from fastapi import Cookie, Depends
@@ -34,6 +35,21 @@ reusable_oauth2_optional = HTTPBearer(auto_error=False)
 def require_self_or_admin(current_user: UserResponse, user_id: uuid.UUID) -> None:
     if current_user.id != user_id and not current_user.is_admin:
         raise ForbiddenException(message="Bạn không có quyền truy cập tài khoản này")
+
+
+def is_token_stale(user: User, issued_at: int | None) -> bool:
+    """
+    Access tokens are stateless, so a password change/reset must invalidate
+    every token issued before it (otherwise a stolen token outlives the reset).
+    """
+    changed_at = getattr(user, "password_changed_at", None)
+    if changed_at is None:
+        return False
+    if issued_at is None:
+        return True
+    if changed_at.tzinfo is None:
+        changed_at = changed_at.replace(tzinfo=timezone.utc)
+    return issued_at < int(changed_at.timestamp())
 
 
 def resolve_user_access(user: User) -> tuple[list[str], bool]:
@@ -74,7 +90,7 @@ async def get_current_user_optional(
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
 
-    if user is None or not user.is_active:
+    if user is None or not user.is_active or is_token_stale(user, token_data.iat):
         return None
 
     roles, is_admin = resolve_user_access(user)
@@ -151,6 +167,11 @@ async def get_current_user(
         raise UnauthorizedException(
             message="Tài khoản người dùng đã bị khóa hoặc chưa kích hoạt",
             error_code="INACTIVE_USER"
+        )
+    if is_token_stale(user, token_data.iat):
+        raise UnauthorizedException(
+            message="Phiên đăng nhập không còn hiệu lực, vui lòng đăng nhập lại",
+            error_code="INVALID_ACCESS_TOKEN"
         )
 
     roles, is_admin = resolve_user_access(user)

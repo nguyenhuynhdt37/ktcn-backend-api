@@ -6,7 +6,7 @@ Tất cả endpoint chỉ thao tác trên tài khoản của user đang đăng n
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Cookie, Depends, Request
+from fastapi import APIRouter, Cookie, Depends, Request, Response
 from sqlalchemy import select, desc, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -94,6 +94,7 @@ async def update_my_profile(
 @router.put("/password")
 async def change_password(
     request: Request,
+    response: Response,
     payload: ChangePasswordRequest,
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -106,7 +107,21 @@ async def change_password(
     )
     await log_action(db, current_user, "PASSWORD_CHANGED", "user", current_user.id, None, request)
     await db.commit()
-    return {"success": True, "message": "Đổi mật khẩu thành công"}
+
+    # Đổi mật khẩu làm mất hiệu lực mọi phiên & access token cũ (kể cả trên thiết bị khác).
+    # Cấp lại phiên mới cho thiết bị hiện tại để người dùng không bị đăng xuất.
+    from app.modules.auth.router import set_auth_cookies
+    from app.shared.client_ip import get_client_ip
+    token_data, raw_refresh_token = await auth_service.issue_session(
+        db, current_user.id, get_client_ip(request), request.headers.get("user-agent")
+    )
+    set_auth_cookies(response, token_data.access_token, raw_refresh_token, request)
+    return {
+        "success": True,
+        "message": "Đổi mật khẩu thành công",
+        "access_token": token_data.access_token,
+        "token_type": "bearer",
+    }
 
 
 @router.get("/sessions", response_model=List[UserSessionResponse])

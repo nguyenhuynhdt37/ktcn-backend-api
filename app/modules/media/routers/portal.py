@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, Response
 from anyio.to_thread import run_sync
 
 from app.core.config import settings
-from app.modules.media.service import MediaService
+from app.modules.media.service import MediaService, build_public_media_headers
 
 portal_router = APIRouter()
 media_service = MediaService()
@@ -25,7 +25,10 @@ async def get_media_file(
             )
         )
         body = await run_sync(lambda: response["Body"].read())
-        content_type = response.get("ContentType", "application/octet-stream")
-        return Response(content=body, media_type=content_type)
+        # Không tin Content-Type đã lưu: chỉ ảnh/PDF/media mới được hiển thị inline,
+        # mọi loại khác (HTML, JS, ...) bị ép tải xuống để không thể chạy script
+        # trên origin của API (nơi có cookie đăng nhập của quản trị viên).
+        media_type, headers = build_public_media_headers(response.get("ContentType"))
+        return Response(content=body, media_type=media_type, headers=headers)
     except Exception as e:
         raise HTTPException(status_code=404, detail="File not found")

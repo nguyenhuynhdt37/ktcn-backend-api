@@ -39,6 +39,20 @@ class Settings(BaseSettings):
     RATE_LIMIT_GLOBAL: str = "100/minute"
     RATE_LIMIT_AUTH: str = "5/minute"
     RATE_LIMIT_AI: str = "10/minute"
+    RATE_LIMIT_MEDIA: str = "600/minute"
+
+    # Only these peers may set CF-Connecting-IP / X-Real-IP / X-Forwarded-For.
+    # Defaults cover loopback and private (Docker / LAN) reverse proxies.
+    TRUSTED_PROXIES: Annotated[list[str], BeforeValidator(parse_cors)] = [
+        "127.0.0.0/8",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "::1/128",
+        "fc00::/7",
+    ]
+    # Optional: pin the single header your edge proxy sets (e.g. "cf-connecting-ip").
+    CLIENT_IP_HEADER: str = ""
 
     # Postgres
     POSTGRES_SERVER: str = "localhost"
@@ -80,7 +94,9 @@ class Settings(BaseSettings):
         "super-secret-key-change-in-production-super-secret-key-change-in-production"
     )
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 11520
+    # Access tokens cannot be revoked individually, so keep them short-lived;
+    # the HttpOnly refresh token (rotated on use) carries the long session.
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 8
 
     # Cookie Settings

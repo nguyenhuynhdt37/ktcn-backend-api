@@ -17,7 +17,7 @@ from app.modules.media.schemas import (
     MediaItemResponse,
     PresignedUrlResponse,
 )
-from app.modules.media.service import MediaService
+from app.modules.media.service import MediaService, build_content_disposition
 
 admin_router = APIRouter()
 media_service = MediaService()
@@ -105,7 +105,10 @@ async def download_file(
     return StreamingResponse(
         io.BytesIO(content),
         media_type=content_type,
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
+        headers={
+            "Content-Disposition": build_content_disposition(filename),
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 

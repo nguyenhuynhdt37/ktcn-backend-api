@@ -154,12 +154,8 @@ async def get_article_detail_portal(
         is_new_guest = True
 
     # 2. Lấy IP khách hàng làm fallback
-    client_ip = None
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        client_ip = forwarded_for.split(",")[0].strip()
-    else:
-        client_ip = request.client.host if request.client else "unknown"
+    from app.shared.client_ip import get_client_ip
+    client_ip = get_client_ip(request)
 
     from app.core.language import get_locale_from_request
     resolved_lang = get_locale_from_request(request, lang)

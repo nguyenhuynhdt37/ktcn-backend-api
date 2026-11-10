@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 import re
 import math
@@ -41,6 +42,22 @@ from app.modules.auth.models import User
 from app.modules.category.models import Category
 from app.modules.tag.models import Tag
 from app.modules.article.repositories.query_builder import ArticleQueryBuilder, ArticleFilterParams, SortStrategy
+
+
+# Giữ tham chiếu để task nền không bị garbage-collect trước khi chạy xong
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_background(coro: Any) -> None:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+
+    def _done(finished: asyncio.Task) -> None:
+        _background_tasks.discard(finished)
+        if not finished.cancelled() and finished.exception() is not None:
+            logger.warning("Background task failed: {}", finished.exception())
+
+    task.add_done_callback(_done)
 
 
 class ArticleService:
@@ -127,6 +144,14 @@ class ArticleService:
             
         return slug_candidate
 
+    @staticmethod
+    def _ensure_owner_or_admin(article: Article, current_user: Any) -> None:
+        """Chỉ tác giả hoặc quản trị viên mới được thay đổi trạng thái/thuộc tính bài viết."""
+        roles = getattr(current_user, "roles", []) or []
+        is_user_admin = getattr(current_user, "is_admin", False) or "admin" in roles or "super_admin" in roles
+        if article.author_id != current_user.id and not is_user_admin:
+            raise ForbiddenException(message="Bạn không có quyền thao tác với bài viết của tác giả khác.")
+
     async def _trigger_article_publish_notification(
         self,
         db: AsyncSession,
@@ -170,10 +195,13 @@ class ArticleService:
 
             target_url = f"/vi/thong-bao/{slug_vi}" if slug_vi else "/vi/thong-bao"
 
-            await notification_service.send_web_push_to_all(
-                title="Thông báo mới: " + title_vi,
-                body=excerpt_vi[:120] + "..." if len(excerpt_vi) > 120 else excerpt_vi,
-                url=target_url
+            # Gửi nền: không bắt request xuất bản phải chờ gửi tới từng thiết bị
+            _spawn_background(
+                notification_service.send_web_push_to_all(
+                    title="Thông báo mới: " + title_vi,
+                    body=excerpt_vi[:120] + "..." if len(excerpt_vi) > 120 else excerpt_vi,
+                    url=target_url
+                )
             )
         except Exception as e:
             logger.warning("Failed to trigger web push notification: {}", e)
@@ -312,6 +340,8 @@ class ArticleService:
         if not article:
             raise NotFoundException(message="Không tìm thấy bài viết hoặc bài viết đã bị xóa.")
 
+        self._ensure_owner_or_admin(article, current_user)
+
         # Idempotent: Nếu đã là ARCHIVED rồi thì không cần làm gì, trả về luôn
         if article.status == ArticleStatus.ARCHIVED:
             return article
@@ -382,6 +412,8 @@ class ArticleService:
         
         if not article:
             raise NotFoundException(message="Không tìm thấy bài viết hoặc bài viết đã bị xóa.")
+
+        self._ensure_owner_or_admin(article, current_user)
 
         # Idempotent: Nếu đã là PUBLISHED rồi thì không cần làm gì, trả về luôn
         if article.status == ArticleStatus.PUBLISHED:
@@ -611,6 +643,8 @@ class ArticleService:
         
         if not article:
             raise NotFoundException(message="Không tìm thấy bài viết hoặc bài viết đã bị xóa.")
+
+        self._ensure_owner_or_admin(article, current_user)
 
         changes = {}
         if payload.is_pinned is not None:
@@ -1656,6 +1690,8 @@ class ArticleService:
         
         if not article:
             raise NotFoundException(message="Không tìm thấy bài viết.")
+
+        self._ensure_owner_or_admin(article, current_user)
 
         if article.deleted_at is not None:
             article.deleted_at = None

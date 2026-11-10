@@ -11,6 +11,7 @@ from app.core.exceptions import TooManyRequestsException, UnauthorizedException,
 from app.core.security import decode_access_token
 from app.modules.auth.dependencies import get_current_user, require_admin, require_self_or_admin
 from app.modules.auth.models import User
+from app.shared.client_ip import get_client_ip
 from app.shared.rate_limiter import check_rate_limit
 from app.shared.redis import get_redis
 from app.modules.audit.service import log_action
@@ -42,17 +43,19 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str, 
     Helper to set the secure, HttpOnly access and refresh token cookies.
     """
     secure = settings.COOKIE_SECURE
-    samesite = settings.COOKIE_SAMESITE
+    # SameSite luôn theo cấu hình (mặc định "lax"). Không tự hạ xuống "none" khi
+    # chạy HTTPS: "none" khiến trình duyệt gửi cookie trong request từ site khác (CSRF).
+    # Môi trường nào thật sự cần cross-site (vd: FE localhost gọi API staging) thì
+    # đặt COOKIE_SAMESITE=none riêng cho môi trường đó.
+    samesite = settings.COOKIE_SAMESITE.lower()
 
-    # Nếu request gọi qua HTTPS hoặc được chuyển tiếp HTTPS qua Proxy, ta bắt buộc phải dùng SameSite=None, Secure=True để hỗ trợ client ở các origin khác (như dev ở localhost)
-    is_https = False
     if request:
         if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
-            is_https = True
-            
-    if is_https:
-        secure = True
-        samesite = "none"
+            secure = True
+    if samesite == "none":
+        secure = True  # trình duyệt từ chối SameSite=None nếu thiếu Secure
+
+    session_max_age = settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
 
     response.set_cookie(
         key="access_token",
@@ -60,7 +63,10 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str, 
         httponly=True,
         secure=secure,
         samesite=samesite,
-        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        # JWT bên trong tự hết hạn sau ACCESS_TOKEN_EXPIRE_MINUTES. Cookie được giữ
+        # lâu bằng phiên để server trả EXPIRED_ACCESS_TOKEN (client tự refresh)
+        # thay vì MISSING_ACCESS_TOKEN (client coi như đã đăng xuất).
+        max_age=session_max_age,
         path="/",
     )
     response.set_cookie(
@@ -69,7 +75,7 @@ def set_auth_cookies(response: Response, access_token: str, refresh_token: str, 
         httponly=True,
         secure=secure,
         samesite=samesite,
-        max_age=8 * 24 * 60 * 60,  # 8 days in seconds
+        max_age=session_max_age,
         path="/",  # Accessible system-wide
     )
 
@@ -87,7 +93,7 @@ async def login(
     and a secure refresh token in HttpOnly cookie.
     Rate limited: 5 failed attempts per minute per IP.
     """
-    ip_address = request.client.host if request.client else "unknown"
+    ip_address = get_client_ip(request)
     user_agent = request.headers.get("user-agent")
 
     # Rate limiting check
@@ -139,7 +145,7 @@ async def refresh_token(
             error_code="MISSING_REFRESH_TOKEN"
         )
 
-    ip_address = request.client.host if request.client else "unknown"
+    ip_address = get_client_ip(request)
     user_agent = request.headers.get("user-agent")
 
     token_data, new_raw_refresh_token = await auth_service.rotate_refresh_token(
@@ -269,7 +275,10 @@ async def list_users(
         search=search,
         is_active=is_active,
         is_deleted=is_deleted,
+        search_contact=current_user.is_admin,
     )
+    # Thành viên thường chỉ cần tên/ảnh (vd: lọc tác giả); email & SĐT chỉ dành cho Admin.
+    can_view_contact = current_user.is_admin
     from app.core.config import settings
     protocol = "https" if settings.MINIO_SECURE else "http"
     list_items = []
@@ -288,8 +297,8 @@ async def list_users(
             UserListItemResponse(
                 id=item.id,
                 username=item.username,
-                email=item.email,
-                phone=item.phone,
+                email=item.email if can_view_contact or item.id == current_user.id else "",
+                phone=item.phone if can_view_contact or item.id == current_user.id else None,
                 full_name=item.full_name,
                 avatar_url=avatar_url,
                 is_active=item.is_active,
@@ -364,6 +373,7 @@ async def get_user_detail(
 @users_router.put("/{user_id}", response_model=UserDetailResponse)
 async def update_user(
     request: Request,
+    response: Response,
     user_id: uuid.UUID,
     payload: UserUpdate,
     current_user: UserResponse = Depends(get_current_user),
@@ -383,7 +393,14 @@ async def update_user(
     user = await auth_service.update_user(db, user_id, payload, current_user)
     await log_action(db, current_user, "USER_UPDATED", "user", user_id, changes, request)
     await db.commit()
-    return UserDetailResponse.model_validate(user)
+    detail = UserDetailResponse.model_validate(user)
+    if payload.password is not None and user_id == current_user.id:
+        # Mật khẩu vừa đổi đã vô hiệu hoá token hiện tại -> cấp phiên mới cho chính thiết bị này
+        token_data, raw_refresh_token = await auth_service.issue_session(
+            db, user_id, get_client_ip(request), request.headers.get("user-agent")
+        )
+        set_auth_cookies(response, token_data.access_token, raw_refresh_token, request)
+    return detail
 
 
 @users_router.delete("/{user_id}")

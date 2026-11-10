@@ -54,7 +54,8 @@ async def log_action(
     ip_address = None
     user_agent = None
     if request:
-        ip_address = request.client.host if request.client else None
+        from app.shared.client_ip import get_client_ip
+        ip_address = get_client_ip(request, default="") or None
         user_agent = request.headers.get("user-agent")
 
     # Đảm bảo changes là JSON serializable (convert UUID -> str)

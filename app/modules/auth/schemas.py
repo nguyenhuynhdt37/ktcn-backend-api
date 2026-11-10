@@ -27,6 +27,7 @@ class TokenPayload(BaseModel):
     """
     sub: str | None = None
     exp: int | None = None
+    iat: int | None = None
 
 
 class UserResponse(BaseModel):

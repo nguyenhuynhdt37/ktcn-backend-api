@@ -2,11 +2,16 @@ import csv
 import io
 import uuid
 
-from fastapi import APIRouter, Depends, Query, status
+import redis.asyncio as aioredis
+from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.exceptions import TooManyRequestsException
+from app.shared.client_ip import get_client_ip, is_internal_call
+from app.shared.rate_limiter import check_rate_limit
+from app.shared.redis import get_redis
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.schemas import UserResponse
 from app.modules.consultation.models import ConsultationRequestType, ConsultationStatus
@@ -29,9 +34,25 @@ admin_router = APIRouter()
     status_code=status.HTTP_201_CREATED,
 )
 async def create_consultation(
+    request: Request,
     payload: ConsultationCreate,
     db: AsyncSession = Depends(get_db),
+    redis_client: aioredis.Redis = Depends(get_redis),
 ) -> ConsultationCreatedResponse:
+    # Form công khai: giới hạn theo IP để không thể spam bằng cách đổi số điện thoại
+    # (mỗi yêu cầu còn tạo thông báo cho toàn bộ quản trị viên).
+    if not is_internal_call(request):
+        allowed, _, retry_after = await check_rate_limit(
+            redis_client,
+            f"rate_limit:consultation:{get_client_ip(request)}",
+            max_attempts=5,
+            window_seconds=600,
+        )
+        if not allowed:
+            raise TooManyRequestsException(
+                message="Bạn đã gửi quá nhiều yêu cầu. Vui lòng thử lại sau ít phút.",
+                details={"retry_after": retry_after},
+            )
     lead = await consultation_service.create(db, payload)
     return ConsultationCreatedResponse(
         id=lead.id,

@@ -10,6 +10,7 @@ from loguru import logger
 from app.core.config import settings
 from app.core.security import decode_access_token
 from app.shared import redis
+from app.shared.client_ip import get_client_ip, is_internal_call
 
 # Redis Lua Script for Sliding Window Rate Limiting (Atomic Operation)
 SLIDING_WINDOW_SCRIPT = """
@@ -68,6 +69,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         """
         Returns (limit, window_ms, limit_category) based on request path.
         """
+        # Public media proxy: one page legitimately loads many files
+        if path.startswith(f"{settings.API_V1_STR}/portal/media/"):
+            limit, window = parse_rate_limit_string(settings.RATE_LIMIT_MEDIA)
+            return limit, window, "media"
+
         # Auth endpoints
         if "/auth/login" in path or "/auth/register" in path:
             limit, window = parse_rate_limit_string(settings.RATE_LIMIT_AUTH)
@@ -84,24 +90,20 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     def _extract_client_ip(self, request: Request) -> str:
         """
-        Safely extracts client IP, honoring trusted proxy headers.
+        Extracts client IP. Proxy headers are honoured only when the request
+        really comes from a trusted proxy (see app.shared.client_ip).
         """
-        # Trust Cloudflare proxy header first
-        cf_ip = request.headers.get("cf-connecting-ip")
-        if cf_ip:
-            return cf_ip
-            
-        # Trust X-Real-IP
-        real_ip = request.headers.get("x-real-ip")
-        if real_ip:
-            return real_ip
-            
-        # Parse X-Forwarded-For
-        xff = request.headers.get("x-forwarded-for")
-        if xff:
-            return xff.split(",")[0].strip()
-            
-        return request.client.host if request.client else "unknown"
+        return get_client_ip(request)
+
+    @staticmethod
+    def _bucket_for_path(path: str) -> str:
+        """
+        Collapses a URL to its module (e.g. /api/v1/portal/articles) so that
+        distinct slugs / ids do not each get a fresh counter.
+        """
+        parts = [part for part in path.split("/") if part]
+        depth = 4 if len(parts) > 2 and parts[2] in ("admin", "portal") else 3
+        return "/".join(parts[:depth])
 
     def _get_user_id_from_token(self, request: Request) -> str | None:
         """
@@ -141,16 +143,21 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         limit, window_ms, category = self._get_limit_for_path(path)
 
         # 2. Determine Identifier (User ID if logged in, otherwise Client IP)
-        # Chúng ta đính kèm thêm path vào key để giới hạn riêng cho từng endpoint cụ thể
+        # Key theo module (không theo full path) để không thể né giới hạn bằng cách đổi slug/id.
+        bucket = self._bucket_for_path(path)
         user_id = self._get_user_id_from_token(request)
         if user_id:
-            identifier_key = f"ratelimit:{category}:user:{user_id}:{path}"
+            identifier_key = f"ratelimit:{category}:user:{user_id}:{bucket}"
         else:
+            # Server-side rendering calls from inside the private network carry no
+            # end-user address; throttling them would throttle the whole site.
+            if category in ("global", "media") and is_internal_call(request):
+                return await call_next(request)
             client_ip = self._extract_client_ip(request)
-            identifier_key = f"ratelimit:{category}:ip:{client_ip}:{path}"
+            identifier_key = f"ratelimit:{category}:ip:{client_ip}:{bucket}"
 
         # 3. Apply Sliding Window Limit using Redis Script
-        logger.info(f"RateLimit Check | Path: {path} | Category: {category} | Limit: {limit} | Key: {identifier_key} | User ID: {user_id}")
+        logger.debug(f"RateLimit Check | Path: {path} | Category: {category} | Limit: {limit} | Key: {identifier_key} | User ID: {user_id}")
         try:
             # Create redis client using global pool
             redis_client = aioredis.Redis(connection_pool=redis.redis_pool)

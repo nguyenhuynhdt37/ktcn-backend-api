@@ -8,6 +8,7 @@ from app.core.config import settings
 import app.shared.redis as redis_shared
 from app.core.database import SessionLocal
 from app.modules.statistics.service import statistics_service
+from app.shared.client_ip import get_client_ip
 
 class VisitorCounterMiddleware(BaseHTTPMiddleware):
     """
@@ -42,12 +43,7 @@ class VisitorCounterMiddleware(BaseHTTPMiddleware):
                     is_new_guest = True
                     
                 # 2. Xác định IP khách hàng
-                client_ip = "unknown"
-                forwarded_for = request.headers.get("X-Forwarded-For")
-                if forwarded_for:
-                    client_ip = forwarded_for.split(",")[0].strip()
-                elif request.client:
-                    client_ip = request.client.host
+                client_ip = get_client_ip(request)
                     
                 # 3. Ghi nhận lượt xem và trạng thái online
                 if redis_shared.redis_pool:

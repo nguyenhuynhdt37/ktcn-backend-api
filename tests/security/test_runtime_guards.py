@@ -100,8 +100,9 @@ def test_rate_limit_categories():
     assert middleware._get_limit_for_path("/api/v1/auth/login")[2] == "auth"
     assert middleware._get_limit_for_path("/api/v1/ai-hub/rewrite")[2] == "ai"
     assert middleware._get_limit_for_path("/api/v1/articles")[2] == "global"
+    # A direct (untrusted) peer cannot pick its own identity through headers.
     request = http_request(headers={"X-Forwarded-For": "198.51.100.8, 203.0.113.5", "CF-Connecting-IP": "192.0.2.9"})
-    assert middleware._extract_client_ip(request) == "192.0.2.9"
+    assert middleware._extract_client_ip(request) == "203.0.113.5"
 
 
 @pytest.mark.asyncio
