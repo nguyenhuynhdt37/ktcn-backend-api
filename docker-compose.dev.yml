@@ -1,24 +1,8 @@
 version: '3.8'
 
-services:
-  db:
-    image: pgvector/pgvector:pg17
-    container_name: be_postgres
-    restart: always
-    environment:
-      POSTGRES_DB: university_cms
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres_password
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d university_cms"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+# PostgreSQL and MinIO are external (configured in .env).
 
+services:
   redis:
     image: redis:8-alpine
     container_name: be_redis
@@ -33,20 +17,6 @@ services:
       timeout: 3s
       retries: 5
 
-  minio:
-    image: minio/minio:latest
-    container_name: be_minio
-    restart: always
-    ports:
-      - "9000:9000"   # API
-      - "9091:9001"   # Web Console (Tránh trùng port 9001 của Portainer)
-    environment:
-      MINIO_ROOT_USER: minio_admin
-      MINIO_ROOT_PASSWORD: minio_password
-    command: server /data --console-address ":9001"
-    volumes:
-      - minio_data:/data
-
   omniroute:
     image: litellm/litellm:main-latest
     container_name: omniroute_gateway
@@ -60,6 +30,4 @@ services:
       - LITELLM_MASTER_KEY=sk-omniroute-secret-key
 
 volumes:
-  postgres_data:
   redis_data:
-  minio_data:

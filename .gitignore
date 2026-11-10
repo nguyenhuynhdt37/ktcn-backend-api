@@ -87,6 +87,7 @@ app.db
 # Dynamic AI Configuration Settings
 app/core/ai_settings.json
 omniroute/config.yaml
+/config.yaml
 
 # Scratch directories
 scratch/

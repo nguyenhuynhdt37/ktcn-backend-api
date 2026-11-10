@@ -1,24 +1,8 @@
 version: '3.8'
 
-services:
-  db:
-    image: pgvector/pgvector:pg17
-    container_name: be_postgres
-    restart: always
-    environment:
-      POSTGRES_DB: university_cms
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres_password
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d university_cms"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+# PostgreSQL and MinIO are external (configured in .env).
 
+services:
   redis:
     image: redis:8-alpine
     container_name: be_redis
@@ -32,19 +16,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
-  minio:
-    image: minio/minio:latest
-    container_name: be_minio
-    restart: always
-    ports:
-      - "9000:9000"   # API
-      - "9091:9001"   # Web Console (Đổi sang 9091 tránh portainer 9001 trên server)
-    environment:
-      MINIO_ROOT_USER: minio_admin
-      MINIO_ROOT_PASSWORD: minio_password
-    command: server /data --console-address ":9001"
-    volumes:
-      - minio_data:/data
 
   omniroute:
     image: litellm/litellm:main-latest
@@ -57,6 +28,7 @@ services:
     command: [ "--config", "/app/config.yaml", "--port", "4000", "--detailed_debug" ]
     environment:
       - LITELLM_MASTER_KEY=sk-omniroute-secret-key
+
   backend:
     build:
       context: .
@@ -67,16 +39,16 @@ services:
       - "8000:8000"
     environment:
       - ENV_FILE=.env
+      # Container-local services (Postgres & MinIO come from .env)
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_HOST=redis
+      - AI_BASE_URL=http://omniroute:4000
     volumes:
       - .env:/app/.env
       - ./omniroute:/app/omniroute
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
 
 volumes:
-  postgres_data:
   redis_data:
-  minio_data:
