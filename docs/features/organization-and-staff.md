@@ -1,6 +1,6 @@
 # 🏛️ Tính Năng Quản Lý Cơ Cấu Tổ Chức & Cán Bộ (Organization & Staff Management)
 
-Module Tổ chức & Nhân sự quản lý toàn bộ cơ cấu khoa, viện, bộ môn trực thuộc Trường Kỹ Thuật và Công Nghệ - Đại Học Vinh, cùng với danh sách cán bộ, giảng viên, hồ sơ khoa học và thư viện hoạt động.
+Module Tổ chức & Nhân sự quản lý toàn bộ cơ cấu khoa, viện, bộ môn trực thuộc Trường Kỹ thuật và Công nghệ - Trường Đại học Vinh, cùng với danh sách cán bộ, giảng viên, hồ sơ khoa học và thư viện hoạt động.
 
 ---
 

@@ -1,5 +1,5 @@
 # 📚 Tài Liệu Kỹ Thuật Toàn Diện - KTCN Backend REST API
-> **Trường Kỹ Thuật và Công Nghệ - Đại Học Vinh**  
+> **Trường Kỹ thuật và Công nghệ - Trường Đại học Vinh**  
 > Máy chủ dịch vụ RESTful API bất đồng bộ (Asynchronous) phát triển trên nền tảng **FastAPI**, **PostgreSQL**, **Redis**, **MinIO/S3** và **OmniRoute AI Gateway**.
 
 ---
