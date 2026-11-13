@@ -1,5 +1,6 @@
 from app.modules.staff.schemas.common import (
     StaffCreate,
+    StaffMove,
     StaffUpdate,
     build_staff_resolved,
 )

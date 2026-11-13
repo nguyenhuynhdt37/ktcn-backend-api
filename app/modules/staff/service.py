@@ -137,6 +137,23 @@ class StaffService:
 
         return staff
 
+    async def _staffs_in_display_order(self, db: AsyncSession, department_id: uuid.UUID) -> list[Staff]:
+        """Cán bộ của một đơn vị theo đúng thứ tự mà danh sách đang hiển thị (đã khóa để sắp xếp)."""
+        result = await db.execute(
+            select(Staff)
+            .where(Staff.deleted_at.is_(None), Staff.department_id == department_id)
+            .order_by(Staff.sort_order.asc(), Staff.created_at.desc())
+            .with_for_update()
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    def _renumber(staffs: list[Staff]) -> None:
+        """Đánh lại sort_order liên tục từ 0 theo thứ tự của danh sách."""
+        for index, staff in enumerate(staffs):
+            if staff.sort_order != index:
+                staff.sort_order = index
+
     async def list_staffs(
         self,
         db: AsyncSession,
@@ -301,17 +318,11 @@ class StaffService:
         if slug_exists.scalar_one_or_none():
             slug = f"{base_slug}-{uuid.uuid4().hex[:4]}"
 
-        # Tự động đẩy các staff có sort_order >= data.sort_order TRONG CÙNG DEPARTMENT
-        from sqlalchemy import update
-        await db.execute(
-            update(Staff)
-            .where(
-                Staff.deleted_at.is_(None),
-                Staff.department_id == data.department_id,
-                Staff.sort_order >= data.sort_order
-            )
-            .values(sort_order=Staff.sort_order + 1)
-        )
+        # Chừa đúng một chỗ trống tại vị trí được chọn trong bộ môn, các số còn lại liên tục.
+        dept_staffs = await self._staffs_in_display_order(db, data.department_id)
+        sort_order = max(0, min(data.sort_order, len(dept_staffs)))
+        for index, existing in enumerate(dept_staffs):
+            existing.sort_order = index if index < sort_order else index + 1
 
         staff = Staff(
             department_id=data.department_id,
@@ -329,7 +340,7 @@ class StaffService:
             phone=data.phone,
             website=data.website,
             office=data.office,
-            sort_order=data.sort_order,
+            sort_order=sort_order,
             is_active=data.is_active,
             profile_status=data.profile_status,
             is_visible=data.is_visible,
@@ -426,60 +437,30 @@ class StaffService:
 
         # Xử lý sort_order và department_id
         old_dept_id = staff.department_id
-        old_sort = staff.sort_order
-        new_sort = data.sort_order
+        requested_sort = data.sort_order
 
-        if old_dept_id != new_dept_id or (new_sort is not None and new_sort != old_sort):
-            # 1. TRƯỜNG HỢP THAY ĐỔI BỘ MÔN
-            if old_dept_id != new_dept_id:
-                # A. Dồn thứ tự ở bộ môn cũ
-                stmt_old = (
-                    select(Staff)
-                    .where(Staff.deleted_at.is_(None), Staff.department_id == old_dept_id, Staff.id != staff.id)
-                    .order_by(Staff.sort_order.asc(), Staff.created_at.desc())
-                )
-                res_old = await db.execute(stmt_old)
-                old_dept_staffs = list(res_old.scalars().all())
-                for index, s in enumerate(old_dept_staffs):
-                    s.sort_order = index
+        if old_dept_id != new_dept_id:
+            # Dồn thứ tự ở bộ môn cũ, rồi chèn vào bộ môn mới (mặc định xuống cuối).
+            old_dept_staffs = [
+                s for s in await self._staffs_in_display_order(db, old_dept_id) if s.id != staff.id
+            ]
+            self._renumber(old_dept_staffs)
 
-                # B. Chèn vào bộ môn mới
-                stmt_new = (
-                    select(Staff)
-                    .where(Staff.deleted_at.is_(None), Staff.department_id == new_dept_id, Staff.id != staff.id)
-                    .order_by(Staff.sort_order.asc(), Staff.created_at.desc())
-                )
-                res_new = await db.execute(stmt_new)
-                new_dept_staffs = list(res_new.scalars().all())
-
-                if new_sort is None:
-                    new_sort = len(new_dept_staffs)
-                else:
-                    new_sort = max(0, min(new_sort, len(new_dept_staffs)))
-                
-                staff.department_id = new_dept_id
-                new_dept_staffs.insert(new_sort, staff)
-
-                # Re-index toàn bộ danh sách bộ môn mới
-                for index, s in enumerate(new_dept_staffs):
-                    s.sort_order = index
-
-            # 2. TRƯỜNG HỢP CÙNG BỘ MÔN NHƯNG THAY ĐỔI THỨ TỰ
-            else:
-                stmt_same = (
-                    select(Staff)
-                    .where(Staff.deleted_at.is_(None), Staff.department_id == old_dept_id, Staff.id != staff.id)
-                    .order_by(Staff.sort_order.asc(), Staff.created_at.desc())
-                )
-                res_same = await db.execute(stmt_same)
-                same_dept_staffs = list(res_same.scalars().all())
-
-                new_sort = max(0, min(new_sort, len(same_dept_staffs)))
-                same_dept_staffs.insert(new_sort, staff)
-
-                # Re-index toàn bộ danh sách trong bộ môn
-                for index, s in enumerate(same_dept_staffs):
-                    s.sort_order = index
+            new_dept_staffs = [
+                s for s in await self._staffs_in_display_order(db, new_dept_id) if s.id != staff.id
+            ]
+            target = len(new_dept_staffs) if requested_sort is None else requested_sort
+            staff.department_id = new_dept_id
+            new_dept_staffs.insert(max(0, min(target, len(new_dept_staffs))), staff)
+            self._renumber(new_dept_staffs)
+        elif requested_sort is not None:
+            dept_staffs = await self._staffs_in_display_order(db, old_dept_id)
+            # Chỉ di chuyển khi người dùng thực sự đổi con số; nếu không thì giữ nguyên
+            # vị trí đang hiển thị và chỉ vá lại các số bị trùng/nhảy cóc.
+            if requested_sort != staff.sort_order:
+                dept_staffs = [s for s in dept_staffs if s.id != staff.id]
+                dept_staffs.insert(max(0, min(requested_sort, len(dept_staffs))), staff)
+            self._renumber(dept_staffs)
 
         if data.is_active is not None:
             staff.is_active = data.is_active
@@ -523,21 +504,31 @@ class StaffService:
         db.expire(staff, ["academic_title", "degree"])
         return await self.get_staff(db, staff.id, lang="vi")
 
+    async def move_staff(self, db: AsyncSession, staff_id: uuid.UUID, direction: str) -> Staff:
+        """Đổi vị trí hiển thị của một cán bộ trong đơn vị: up, down, top hoặc bottom."""
+        staff = await self.get_staff(db, staff_id)
+        dept_staffs = await self._staffs_in_display_order(db, staff.department_id)
+
+        current = next(index for index, s in enumerate(dept_staffs) if s.id == staff.id)
+        last = len(dept_staffs) - 1
+        target = {"up": current - 1, "down": current + 1, "top": 0, "bottom": last}[direction]
+        target = max(0, min(target, last))
+
+        dept_staffs.insert(target, dept_staffs.pop(current))
+        self._renumber(dept_staffs)
+
+        await db.flush()
+        return await self.get_staff(db, staff.id, lang="vi")
+
     async def delete_staff(self, db: AsyncSession, staff_id: uuid.UUID) -> None:
         staff = await self.get_staff(db, staff_id)
-        
-        # Dồn thứ tự các giảng viên đứng sau trong bộ môn
-        from sqlalchemy import update
-        await db.execute(
-            update(Staff)
-            .where(
-                Staff.deleted_at.is_(None),
-                Staff.department_id == staff.department_id,
-                Staff.sort_order > staff.sort_order
-            )
-            .values(sort_order=Staff.sort_order - 1)
-        )
-        
+
+        # Dồn thứ tự các giảng viên còn lại trong bộ môn
+        remaining = [
+            s for s in await self._staffs_in_display_order(db, staff.department_id) if s.id != staff.id
+        ]
+        self._renumber(remaining)
+
         staff.deleted_at = datetime.now(UTC)
         await db.flush()
 

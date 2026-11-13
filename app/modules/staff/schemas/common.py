@@ -150,6 +150,11 @@ class StaffCreate(BaseModel):
         return v
 
 
+class StaffMove(BaseModel):
+    """Payload đổi vị trí hiển thị của giảng viên trong đơn vị."""
+    direction: Literal["up", "down", "top", "bottom"]
+
+
 class StaffUpdate(BaseModel):
     """Payload cập nhật giảng viên."""
     department_id: Optional[uuid.UUID] = None

@@ -9,6 +9,7 @@ from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.schemas import UserResponse
 from app.modules.staff.schemas import (
     StaffCreate,
+    StaffMove,
     AdminStaffResponse,
     StaffUpdate,
     StaffPaginationResponse,
@@ -123,6 +124,26 @@ async def update_staff_admin(
     await log_action(
         db, current_user, "STAFF_UPDATED", "staff", staff.id,
         {"full_name": staff.full_name}, request
+    )
+    await db.commit()
+    return AdminStaffResponse.model_validate(staff)
+
+
+@admin_router.post("/{staff_id}/move", response_model=AdminStaffResponse)
+async def move_staff_admin(
+    request: Request,
+    staff_id: uuid.UUID,
+    payload: StaffMove,
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AdminStaffResponse:
+    """
+    [CMS Admin] Đổi vị trí hiển thị của giảng viên trong đơn vị (lên, xuống, lên đầu, xuống cuối).
+    """
+    staff = await staff_service.move_staff(db, staff_id, payload.direction)
+    await log_action(
+        db, current_user, "STAFF_REORDERED", "staff", staff.id,
+        {"full_name": staff.full_name, "direction": payload.direction, "sort_order": staff.sort_order}, request
     )
     await db.commit()
     return AdminStaffResponse.model_validate(staff)
