@@ -11,7 +11,7 @@ from app.modules.staff.models import Staff, StaffTranslation
 from app.modules.staff.schemas import StaffCreate, StaffUpdate
 from app.modules.language.models import Language
 from app.modules.department.models import Department
-from app.modules.position.models import Position
+from app.modules.position.models import Position, PositionTranslation
 from app.modules.academic_title.models import AcademicTitle
 from app.modules.degree.models import Degree
 
@@ -170,6 +170,7 @@ class StaffService:
         page: int = 1,
         page_size: int = 10,
         lang: str = "vi",
+        position_name_like: Optional[str] = None,
     ) -> Tuple[list[Staff], int]:
         stmt = (
             select(Staff)
@@ -192,6 +193,15 @@ class StaffService:
             stmt = stmt.where(Staff.department_id == department_id)
         if position_id is not None:
             stmt = stmt.where(Staff.position_id == position_id)
+        if position_name_like:
+            # Lọc theo tên chức vụ (mọi ngôn ngữ), không phụ thuộc đơn vị chủ quản.
+            stmt = stmt.where(
+                Staff.position_id.in_(
+                    select(PositionTranslation.position_id).where(
+                        PositionTranslation.name.ilike(f"%{position_name_like}%")
+                    )
+                )
+            )
         if academic_title_id is not None:
             stmt = stmt.where(Staff.academic_title_id == academic_title_id)
         if degree_id is not None:

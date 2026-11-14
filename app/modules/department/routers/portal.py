@@ -78,9 +78,13 @@ async def get_department_overview_portal(
 
     from app.modules.staff.service import staff_service
 
+    # Trang Ban lãnh đạo: lấy các Phó Hiệu trưởng ở mọi đơn vị (một cán bộ chỉ thuộc
+    # một đơn vị chủ quản, vd. Phó Hiệu trưởng vẫn thuộc khoa CNTT) nên lọc theo chức vụ.
+    is_leadership_unit = department.slug in ("ban-lanh-dao-vien", "institute-board-of-management")
     staffs, _ = await staff_service.list_staffs(
         db=db,
-        department_id=department.id,
+        department_id=None if is_leadership_unit else department.id,
+        position_name_like="Phó Hiệu trưởng" if is_leadership_unit else None,
         is_active=True,
         is_visible=True,
         sort_by="sort_order",
