@@ -71,3 +71,24 @@ def test_sanitize_empty_gives_no_info():
 def test_sanitize_truncates_and_keeps_normal_text():
     assert sanitize_answer("a" * 5000, CANARY, "vi") == "a" * 2000
     assert sanitize_answer("Khoa CNTT ở /vi/bo-mon/khoa-cntt", CANARY, "vi") == "Khoa CNTT ở /vi/bo-mon/khoa-cntt"
+
+
+def test_sanitize_converts_markdown_to_plain_text():
+    out = sanitize_answer("Có **Hoàng Hữu Việt** — [/vi/nhan-su/hoang-huu-viet]\n`code` __đậm__", CANARY, "vi")
+    assert "**" not in out and "__" not in out and "`" not in out
+    assert "[/vi" not in out and "/vi/nhan-su/hoang-huu-viet" in out
+    assert "Hoàng Hữu Việt" in out and "đậm" in out
+
+
+def test_sanitize_markdown_link_keeps_label_and_url():
+    out = sanitize_answer("Xem [Khoa CNTT](/vi/bo-mon/khoa-cntt) nhé", CANARY, "vi")
+    assert out == "Xem Khoa CNTT (/vi/bo-mon/khoa-cntt) nhé"
+
+
+def test_sanitize_strips_heading_hashes_keeps_bullets():
+    out = sanitize_answer("## Danh sách\n- Khoa A\n- Khoa B", CANARY, "vi")
+    assert out == "Danh sách\n- Khoa A\n- Khoa B"
+
+
+def test_instruction_asks_for_plain_text():
+    assert "văn bản thuần" in _instruction() and "plain text" in _instruction(lang="en")
