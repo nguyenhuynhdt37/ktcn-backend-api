@@ -47,7 +47,7 @@ model_list:
     model: gemini/gemini-embedding-2
   model_name: embedding-model
 - litellm_params:
-    api_key: os.environ/XAI_API_KEY
+    api_key: your-xai-api-key-here
     model: xai/grok-4-fast-non-reasoning
   model_name: grok-chat
 - litellm_params:

@@ -45,7 +45,5 @@ docs/
   👉 Xem: [Tổng Quan Kiến Trúc](architecture/overview.md) ➔ [Thiết Kế Cơ Sở Dữ Liệu](architecture/database-design.md).
 - **Bạn là Frontend Developer đang tích hợp API?**  
   👉 Xem: [Tổng Quan API Reference](api-reference/overview.md) ➔ [Bảng Chi Tiết API](api-reference/api-list.md) kết hợp [Luồng Xác Thực & Cookie](features/auth-and-security.md).
-- **Bạn cần làm việc với Chatbot hỏi đáp (Grok/Groq, chống prompt injection)?**  
-  👉 Xem: [Chatbot hỏi đáp thông tin website](features/chatbot.md).
 - **Bạn cần cẩm nang tổng hợp All-in-One trong một file duy nhất?**  
   👉 Mở file tài liệu tổng hợp: [`md/boost.md`](../md/boost.md).
