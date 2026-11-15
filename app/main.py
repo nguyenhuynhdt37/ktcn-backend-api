@@ -40,6 +40,7 @@ from app.modules.notification.routers import router as notification_admin_router
 from app.modules.dashboard.router import router as dashboard_router
 from app.modules.program import admin_router as program_admin_router, portal_router as program_portal_router
 from app.modules.gallery import admin_router as gallery_admin_router, portal_router as gallery_portal_router
+from app.modules.chatbot import portal_router as chatbot_portal_router
 
 from app.shared.redis import close_redis, init_redis
 
@@ -158,6 +159,7 @@ app.include_router(department_admin_router, prefix=f"{settings.API_V1_STR}/admin
 app.include_router(department_portal_router, prefix=f"{settings.API_V1_STR}/portal/departments", tags=["portal-departments"])
 app.include_router(program_admin_router, prefix=f"{settings.API_V1_STR}/admin/programs", tags=["admin-programs"])
 app.include_router(program_portal_router, prefix=f"{settings.API_V1_STR}/portal/programs", tags=["portal-programs"])
+app.include_router(chatbot_portal_router, prefix=f"{settings.API_V1_STR}/portal/chatbot", tags=["portal-chatbot"])
 app.include_router(gallery_admin_router, prefix=f"{settings.API_V1_STR}/admin/galleries", tags=["admin-galleries"])
 app.include_router(gallery_portal_router, prefix=f"{settings.API_V1_STR}/portal/galleries", tags=["portal-galleries"])
 app.include_router(position_admin_router, prefix=f"{settings.API_V1_STR}/admin/positions", tags=["admin-positions"])
