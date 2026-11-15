@@ -15,6 +15,7 @@ def estimate_cost(model_name: str, prompt_tokens: int, completion_tokens: int) -
     """
     pricing = {
         "gemini-2.5-flash": {"input": 0.075, "output": 0.30},
+        "grok": {"input": 0.20, "output": 0.50},
         "llama-3.3-70b": {"input": 0.59, "output": 0.79},
         "cerebras-model": {"input": 0.10, "output": 0.10},
         "mistral-model": {"input": 2.0, "output": 6.0},

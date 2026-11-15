@@ -135,6 +135,15 @@ class Settings(BaseSettings):
     AI_DEFAULT_MODEL: str = "gemini-2.5-flash"
     AI_EMBEDDING_MODEL: str = "embedding-model"
 
+    # Chatbot hỏi đáp thông tin website (Grok qua cổng LiteLLM, dự phòng Groq)
+    CHATBOT_MODEL: str = "grok-chat"
+    CHATBOT_MAX_MESSAGE_CHARS: int = 500
+    CHATBOT_RATE_LIMIT_PER_MIN: int = 8
+    CHATBOT_HISTORY_TURNS: int = 10
+    CHATBOT_SESSION_TTL_SECONDS: int = 1800
+    CHATBOT_KNOWLEDGE_TTL_SECONDS: int = 300
+    CHATBOT_MAX_OUTPUT_TOKENS: int = 500
+
     # Translation Config (NLLB-200)
     TRANSLATION_MODEL_NAME: str = "facebook/nllb-200-distilled-1.3B"
     TRANSLATION_DEVICE: str = "auto"

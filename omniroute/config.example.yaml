@@ -46,9 +46,15 @@ model_list:
     api_key: your-gemini-api-key-here
     model: gemini/gemini-embedding-2
   model_name: embedding-model
+- litellm_params:
+    api_key: os.environ/XAI_API_KEY
+    model: xai/grok-4-fast-non-reasoning  # xác minh tên model bằng GET https://api.x.ai/v1/models
+  model_name: grok-chat
 router_settings:
   disable_health_check: true
   fallbacks:
+  - grok-chat:
+    - llama-3.3-70b
   - glm-4:
     - glm-4-flash
     - gemini-2.5-flash
