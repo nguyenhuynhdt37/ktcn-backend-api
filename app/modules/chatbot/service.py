@@ -11,6 +11,7 @@ from app.modules.chatbot.guard import check_message
 from app.modules.chatbot.output_guard import sanitize_answer
 from app.modules.chatbot.prompt import (
     ERROR_ANSWER,
+    NO_INFO_ANSWER,
     REFUSAL_ANSWER,
     ArticleSnippet,
     build_system_instruction,
@@ -78,7 +79,9 @@ class ChatbotService:
         if answer == REFUSAL_ANSWER[lang]:
             return ChatReply(answer, "refusal")
 
-        await self._store.append(session_id, checked.text, answer)
+        # Không lưu câu "chưa có thông tin" vào lịch sử: model sẽ bắt chước và từ chối cả những câu sau.
+        if answer != NO_INFO_ANSWER[lang]:
+            await self._store.append(session_id, checked.text, answer)
         sources = [{"title": a.title, "url": a.url} for a in articles if a.url in answer]
         return ChatReply(answer, "model", sources)
 

@@ -8,6 +8,7 @@ from loguru import logger
 
 from app.modules.chatbot.guard import fold, normalize_text
 from app.modules.chatbot.prompt import ArticleSnippet
+from app.modules.chatbot.static_knowledge import STATIC_ABOUT
 
 _PAGES = {
     "department": {"vi": "/bo-mon/{slug}", "en": "/departments/{slug}"},
@@ -26,7 +27,7 @@ def page_url(kind: str, slug: str, lang: str) -> str:
 _STOPWORDS = set(
     """cho minh toi hoi voi nhe nha a oi ban la cua va the nao gi nao o dau khong co
     ve cac nhung mot nay do duoc can muon xin vui long thi se da dang bi tai trong tu
-    den hay hoac nhu sao bao nhieu may nao ai tim biet cho biet
+    den hay hoac nhu sao bao nhieu may nao ai tim biet cho biet tin
     the a an of to is are was were be do does did can could would should please tell me
     about what which who whom whose where when how why for in on at and or with my your i you""".split()
 )
@@ -42,6 +43,29 @@ def extract_keywords(question: str, limit: int = 3) -> list[str]:
             continue
         seen.append(token)
     return sorted(seen, key=len, reverse=True)[:limit]
+
+
+# Chuyên mục tin tức của website (các chuyên mục khác chứa trang tĩnh, lịch tuần...).
+NEWS_CATEGORY_SLUG = "tin-tuc-va-su-kien"
+_LATEST = re.compile(r"moi nhat|gan day|moi dang|latest|recent|newest")
+
+
+def extract_phrases(question: str, limit: int = 3) -> list[str]:
+    """Các cặp từ liền nhau (không bị stopword ngắt), vd 'tuyển dụng' — để tìm nguyên cụm."""
+    runs: list[list[str]] = [[]]
+    for token in re.findall(r"\w+", normalize_text(question).lower()):
+        folded = fold(token)
+        if len(folded) >= 2 and folded not in _STOPWORDS:
+            runs[-1].append(token)
+        else:
+            runs.append([])
+    phrases: list[str] = []
+    for run in runs:
+        for first, second in zip(run, run[1:]):
+            phrase = f"{first} {second}"
+            if phrase not in phrases:
+                phrases.append(phrase)
+    return phrases[:limit]
 
 
 def _plain(text: str | None, limit: int = 300) -> str:
@@ -128,7 +152,8 @@ async def _build_core(db, lang: str) -> str:
     staffs, _ = await staff_service.list_staffs(
         db=db, is_active=True, is_visible=True, page=1, page_size=1000, lang=lang
     )
-    return format_core_knowledge(departments, programs, staffs, lang)
+    about = STATIC_ABOUT.get(lang) or STATIC_ABOUT["vi"]
+    return about + "\n\n" + format_core_knowledge(departments, programs, staffs, lang)
 
 
 class CoreKnowledgeCache:
@@ -153,15 +178,20 @@ async def search_articles(db, question: str, lang: str, limit: int = 4) -> list[
     from app.modules.article.schemas.portal import PortalArticleListResponse
     from app.modules.article.service import article_service
 
+    keywords = extract_keywords(question)
+    phrases = extract_phrases(question)
+    wants_latest = bool(_LATEST.search(fold(question)))
+
     found: dict[str, ArticleSnippet] = {}
-    for keyword in extract_keywords(question):
+
+    async def collect(search: str | None, **filters) -> None:
         try:
             articles, _ = await article_service.list_all_articles_portal(
-                db, search=keyword, page=1, page_size=limit, lang=lang
+                db, search=search, page=1, page_size=limit * 2, lang=lang, **filters
             )
         except Exception as exc:  # tìm bài lỗi không được làm hỏng câu trả lời
-            logger.warning(f"Chatbot article search failed for {keyword!r}: {exc}")
-            continue
+            logger.warning(f"Chatbot article search failed for {search!r}: {exc}")
+            return
         for article in articles:
             item = PortalArticleListResponse.model_validate(article)
             key = str(item.id)
@@ -169,5 +199,23 @@ async def search_articles(db, question: str, lang: str, limit: int = 4) -> list[
                 found[key] = ArticleSnippet(
                     title=item.title, url=page_url("article", item.slug, lang),
                     excerpt=_plain(item.excerpt) or item.title,
+                    published=(item.published_at or item.publish_at).strftime("%d/%m/%Y")
+                    if (item.published_at or item.publish_at) else "",
                 )
-    return list(found.values())[:limit]
+
+    if wants_latest:
+        # "tin mới nhất": bài tin mới đăng (bỏ trang tĩnh), không cần từ khóa
+        await collect(None, category_slug=NEWS_CATEGORY_SLUG, sort_by="published_at", sort_dir="desc")
+        latest = list(found.values())[:limit]
+        return latest
+
+    # Cụm từ liền nhau trước ("tuyển dụng"), rồi từ lẻ; sau đó xếp hạng theo số từ khớp.
+    for term in [*phrases, *keywords]:
+        await collect(term)
+
+    def score(snippet: ArticleSnippet) -> int:
+        text = fold(f"{snippet.title} {snippet.excerpt}")
+        return 2 * sum(fold(p) in text for p in phrases) + sum(fold(k) in text for k in keywords)
+
+    ranked = sorted(found.values(), key=score, reverse=True)  # sort ổn định: giữ thứ tự gặp trước khi hòa
+    return ranked[:limit]
