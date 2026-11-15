@@ -78,3 +78,16 @@ async def test_cache_reuses_value_within_ttl_and_rebuilds_at_zero_ttl():
     await fresh.get(None, "vi")
     await fresh.get(None, "vi")
     assert calls == ["vi", "vi"]
+
+
+def test_leadership_section_lists_rectors_across_units():
+    depts, progs, staffs = _data()
+    lecturer = NS(full_name="Trần Văn B", slug="tran-van-b", academic_title_resolved=None,
+                  degree_resolved=None, position=NS(name="Giảng viên"), department=NS(name="Khoa CNTT"))
+    text = format_core_knowledge(depts, progs, staffs + [lecturer], "vi")
+    head = text.index("## Ban lãnh đạo Trường")
+    next_head = text.index("## ", head + 5)
+    section = text[head:next_head]
+    assert "Lê Văn Minh" in section and "Phó Hiệu trưởng" in section
+    assert "Trần Văn B" not in section
+    assert "Trần Văn B" in text  # vẫn có trong mục Cán bộ

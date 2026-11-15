@@ -53,6 +53,17 @@ def _name(obj) -> str:
     return getattr(obj, "name", None) or ""
 
 
+def _position_of(staff) -> str:
+    return _name(getattr(staff, "position", None)) or getattr(staff, "position_name", None) or ""
+
+
+def _who(staff) -> str:
+    title = " ".join(
+        x for x in (getattr(staff, "academic_title_resolved", None), getattr(staff, "degree_resolved", None)) if x
+    )
+    return f"{title} {staff.full_name}".strip()
+
+
 def format_core_knowledge(departments, programs, staffs, lang: str) -> str:
     vi = lang != "en"
     lines: list[str] = []
@@ -72,6 +83,11 @@ def format_core_knowledge(departments, programs, staffs, lang: str) -> str:
             parts.append(desc)
         lines.append("; ".join(parts))
 
+    leaders = [s for s in staffs if "hieu truong" in fold(_position_of(s)) or "rector" in fold(_position_of(s))]
+    lines.append("## Ban lãnh đạo Trường" if vi else "## School leadership")
+    for s in leaders:
+        lines.append(f"- {_who(s)} — {_position_of(s)} — {page_url('staff', s.slug, lang)}")
+
     lines.append("## Chương trình đào tạo" if vi else "## Study programs")
     for p in programs:
         kind = "postgraduate" if getattr(p, "degree_level", None) == "master" else "undergraduate"
@@ -88,13 +104,9 @@ def format_core_knowledge(departments, programs, staffs, lang: str) -> str:
 
     lines.append("## Cán bộ" if vi else "## Staff")
     for s in staffs:
-        title = " ".join(
-            x for x in (getattr(s, "academic_title_resolved", None), getattr(s, "degree_resolved", None)) if x
-        )
-        position = _name(getattr(s, "position", None)) or getattr(s, "position_name", None) or ""
+        position = _position_of(s)
         unit = _name(getattr(s, "department", None))
-        who = f"{title} {s.full_name}".strip()
-        parts = [f"- {who} — {page_url('staff', s.slug, lang)}"]
+        parts = [f"- {_who(s)} — {page_url('staff', s.slug, lang)}"]
         if position:
             parts.append(f"{'Chức vụ' if vi else 'Position'}: {position}")
         if unit:
