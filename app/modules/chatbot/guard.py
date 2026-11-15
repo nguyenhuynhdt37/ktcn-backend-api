@@ -82,3 +82,18 @@ def check_message(raw: str, max_chars: int) -> GuardResult:
     if _looks_like_injection(text):
         return GuardResult(False, "injection", text)
     return GuardResult(True, None, text)
+
+
+_EN_WORDS = {
+    "the", "what", "which", "where", "who", "how", "when", "why", "is", "are", "do", "does", "can", "could",
+    "school", "college", "faculty", "faculties", "program", "programs", "university", "tuition", "admission",
+    "admissions", "contact", "staff", "lecturer", "lecturers", "about", "offer", "offers", "have", "has", "me",
+}
+
+
+def detect_lang(text: str, default: str = "vi") -> str:
+    """Ngôn ngữ của câu hỏi: có dấu tiếng Việt -> vi; toàn ASCII và có từ tiếng Anh phổ biến -> en; còn lại giữ mặc định."""
+    if re.search(r"[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]", text.lower()):
+        return "vi"
+    words = set(re.findall(r"[a-z]+", text.lower()))
+    return "en" if words & _EN_WORDS else default

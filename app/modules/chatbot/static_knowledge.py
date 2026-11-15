@@ -98,3 +98,12 @@ STATIC_ABOUT = {'vi': '## Giới thiệu trường (/vi/gioi-thieu)\n'
        'international databases.\n'
        '- Digital University System: Comprehensive digital university platform: training management, '
        'finance, digital library and science management.'}
+
+STATIC_CONTACT = {
+    "vi": "## Địa chỉ\n- Địa chỉ trường: 182 Lê Duẩn, Thành phố Vinh, Nghệ An (Trường Đại học Vinh).\n"
+          "- Tư vấn tuyển sinh: Tầng 2, Nhà A0, Trường Kỹ thuật và Công nghệ - Trường Đại học Vinh, 182 Lê Duẩn, TP. Vinh, Nghệ An. "
+          "Biểu mẫu đăng ký tư vấn: /vi/tu-van-tuyen-sinh",
+    "en": "## Address\n- School address: 182 Le Duan, Vinh City, Nghe An (Vinh University).\n"
+          "- Admissions advice: 2nd floor, Building A0, College of Engineering and Technology - Vinh University, "
+          "182 Le Duan, Vinh City, Nghe An. Registration form: /en/tu-van-tuyen-sinh",
+}

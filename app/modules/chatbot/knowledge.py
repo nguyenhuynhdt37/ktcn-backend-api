@@ -8,7 +8,7 @@ from loguru import logger
 
 from app.modules.chatbot.guard import fold, normalize_text
 from app.modules.chatbot.prompt import ArticleSnippet
-from app.modules.chatbot.static_knowledge import STATIC_ABOUT
+from app.modules.chatbot.static_knowledge import STATIC_ABOUT, STATIC_CONTACT
 
 _PAGES = {
     "department": {"vi": "/bo-mon/{slug}", "en": "/departments/{slug}"},
@@ -153,7 +153,8 @@ async def _build_core(db, lang: str) -> str:
         db=db, is_active=True, is_visible=True, page=1, page_size=1000, lang=lang
     )
     about = STATIC_ABOUT.get(lang) or STATIC_ABOUT["vi"]
-    return about + "\n\n" + format_core_knowledge(departments, programs, staffs, lang)
+    contact = STATIC_CONTACT.get(lang) or STATIC_CONTACT["vi"]
+    return about + "\n\n" + contact + "\n\n" + format_core_knowledge(departments, programs, staffs, lang)
 
 
 class CoreKnowledgeCache:

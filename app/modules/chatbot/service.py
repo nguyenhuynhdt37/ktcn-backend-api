@@ -7,7 +7,7 @@ from loguru import logger
 
 from app.core.config import settings
 from app.modules.chatbot.faq import detect_faq, faq_answer
-from app.modules.chatbot.guard import check_message
+from app.modules.chatbot.guard import check_message, detect_lang
 from app.modules.chatbot.output_guard import sanitize_answer
 from app.modules.chatbot.prompt import (
     ERROR_ANSWER,
@@ -44,6 +44,7 @@ class ChatbotService:
 
     async def answer(self, db, *, session_id: str, message: str, lang: str) -> ChatReply:
         lang = lang if lang in ("vi", "en") else "vi"
+        lang = detect_lang(message, lang)  # trả lời theo ngôn ngữ người hỏi, không theo ngôn ngữ trang
 
         checked = check_message(message, settings.CHATBOT_MAX_MESSAGE_CHARS)
         if checked.reason == "empty":
