@@ -81,15 +81,15 @@ async def seed_footer():
                 "sort_order": 2,
                 "children": [
                     {
-                        "titles": {"vi": "Khoa CNTT", "en": "Faculty of IT"},
+                        "titles": {"vi": "Khoa Khoa học máy tính và Trí tuệ nhân tạo", "en": "Faculty of Computer Science and Artificial Intelligence"},
                         "target_type": MenuItemTargetType.DEPARTMENT,
-                        "target_id": uuid.UUID("05597b7e-5999-482a-86f7-363937b1e4de"),
+                        "target_id": uuid.UUID("ad04f537-60de-473a-824c-ba8f17af1f1d"),
                         "sort_order": 1
                     },
                     {
-                        "titles": {"vi": "Khoa Khoa học máy tính & AI", "en": "Faculty of CS & AI"},
+                        "titles": {"vi": "Khoa Điện tử và Công nghệ bán dẫn", "en": "Faculty of Electronics and Semiconductor Technology"},
                         "target_type": MenuItemTargetType.DEPARTMENT,
-                        "target_id": uuid.UUID("ad04f537-60de-473a-824c-ba8f17af1f1d"),
+                        "target_id": uuid.UUID("363a4f61-df54-49bb-a0aa-d14fd825af9f"),
                         "sort_order": 2
                     },
                     {
@@ -99,10 +99,22 @@ async def seed_footer():
                         "sort_order": 3
                     },
                     {
-                        "titles": {"vi": "Khoa Công nghệ kỹ thuật Ô tô", "en": "Faculty of Automotive"},
+                        "titles": {"vi": "Khoa Công nghệ kỹ thuật Điện", "en": "Faculty of Electrical Engineering"},
+                        "target_type": MenuItemTargetType.DEPARTMENT,
+                        "target_id": uuid.UUID("8462b8f3-d85e-4308-a2df-ffa87b87fb15"),
+                        "sort_order": 4
+                    },
+                    {
+                        "titles": {"vi": "Khoa Công nghệ thông tin", "en": "Faculty of Information Technology"},
+                        "target_type": MenuItemTargetType.DEPARTMENT,
+                        "target_id": uuid.UUID("05597b7e-5999-482a-86f7-363937b1e4de"),
+                        "sort_order": 5
+                    },
+                    {
+                        "titles": {"vi": "Khoa Công nghệ kỹ thuật Ô tô", "en": "Faculty of Automotive Engineering"},
                         "target_type": MenuItemTargetType.DEPARTMENT,
                         "target_id": uuid.UUID("d4ed0343-ebfc-4f7f-9b6a-b4915123648e"),
-                        "sort_order": 4
+                        "sort_order": 6
                     }
                 ]
             },
