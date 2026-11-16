@@ -29,12 +29,11 @@ from app.modules.consultation.models import *  # noqa: F401, F403
 from app.modules.notification.models import *  # noqa: F401, F403
 from app.modules.program.models import *  # noqa: F401, F403
 from app.modules.gallery.models import *  # noqa: F401, F403
+from app.modules.setting.models import *  # noqa: F401, F403
 
 
 
 def include_object(object, name, type_, reflected, compare_to):
-    if type_ == "table" and name in ["settings"]:
-        return False
     return True
 
 # this is the Alembic Config object, which provides

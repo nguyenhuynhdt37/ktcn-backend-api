@@ -41,6 +41,7 @@ from app.modules.dashboard.router import router as dashboard_router
 from app.modules.program import admin_router as program_admin_router, portal_router as program_portal_router
 from app.modules.gallery import admin_router as gallery_admin_router, portal_router as gallery_portal_router
 from app.modules.chatbot import portal_router as chatbot_portal_router
+from app.modules.setting import setting_admin_router, setting_portal_router
 
 from app.shared.redis import close_redis, init_redis
 
@@ -64,6 +65,7 @@ from app.modules.consultation.models import ConsultationLead
 from app.modules.notification.models import Notification, PushSubscription
 from app.modules.program.models import Program, ProgramTranslation
 from app.modules.gallery.models import DepartmentGallery, DepartmentGalleryTranslation, DepartmentGalleryItem
+from app.modules.setting.models import Setting
 
 
 # Initialize global logging configuration
@@ -197,5 +199,15 @@ app.include_router(
     notification_portal_router,
     prefix=f"{settings.API_V1_STR}/portal/notifications",
     tags=["portal-notifications"],
+)
+app.include_router(
+    setting_admin_router,
+    prefix=f"{settings.API_V1_STR}/admin/settings",
+    tags=["admin-settings"],
+)
+app.include_router(
+    setting_portal_router,
+    prefix=f"{settings.API_V1_STR}/portal/settings",
+    tags=["portal-settings"],
 )
 app.include_router(dashboard_router, prefix=settings.API_V1_STR)
