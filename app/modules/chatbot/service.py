@@ -8,6 +8,7 @@ from loguru import logger
 from app.core.config import settings
 from app.modules.chatbot.faq import detect_faq, faq_answer
 from app.modules.chatbot.guard import check_message, detect_lang
+from app.modules.chatbot.knowledge import match_staff_for_question
 from app.modules.chatbot.output_guard import sanitize_answer
 from app.modules.chatbot.prompt import (
     ERROR_ANSWER,
@@ -35,12 +36,14 @@ class ChatbotService:
         knowledge_cache,
         article_search: Callable[..., Awaitable[list[ArticleSnippet]]],
         contact_provider: Callable[..., Awaitable[str | None]],
+        staff_matcher: Callable[..., Awaitable[str]] | None = None,
     ) -> None:
         self._ai = ai
         self._store = session_store
         self._knowledge = knowledge_cache
         self._article_search = article_search
         self._contact = contact_provider
+        self._staff_matcher = staff_matcher or match_staff_for_question
 
     async def answer(self, db, *, session_id: str, message: str, lang: str) -> ChatReply:
         lang = lang if lang in ("vi", "en") else "vi"
@@ -60,14 +63,16 @@ class ChatbotService:
         canary = secrets.token_hex(8)
         try:
             core = await self._knowledge.get(db, lang)
+            staff_match = await self._safe_staff_match(db, checked.text, lang)
+            full_core = f"{staff_match}\n\n{core}" if staff_match else core
             articles = await self._safe_articles(db, checked.text, lang)
             history = await self._store.load(session_id)
-            system = build_system_instruction(lang, core, articles, canary)
+            system = build_system_instruction(lang, full_core, articles, canary)
             raw = await self._ai.generate_text(
                 prompt=checked.text,
                 system_instruction=system,
                 history=history,
-                temperature=0.2,
+                temperature=0.1,
                 max_tokens=settings.CHATBOT_MAX_OUTPUT_TOKENS,
                 model=settings.CHATBOT_MODEL,
                 db=db,
@@ -85,6 +90,13 @@ class ChatbotService:
             await self._store.append(session_id, checked.text, answer)
         sources = [{"title": a.title, "url": a.url} for a in articles if a.url in answer]
         return ChatReply(answer, "model", sources)
+
+    async def _safe_staff_match(self, db, question: str, lang: str) -> str:
+        try:
+            return await self._staff_matcher(db, question, lang)
+        except Exception as exc:
+            logger.warning(f"Chatbot staff matcher failed (ignored): {exc!r}")
+            return ""
 
     async def _safe_articles(self, db, question: str, lang: str) -> list[ArticleSnippet]:
         try:

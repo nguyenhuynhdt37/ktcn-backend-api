@@ -128,8 +128,8 @@ FAQ_ANSWERS: dict[str, dict[str, str]] = {
 }
 
 _DEFAULT_CONTACT = {
-    "vi": "vui lòng xem trang Liên hệ của trường tại /lien-he.",
-    "en": "please see the College's contact page at /lien-he.",
+    "vi": "vui lòng xem trang Tư vấn tuyển sinh của trường tại /vi/tu-van-tuyen-sinh hoặc gọi 0238 3855 452.",
+    "en": "please see the College's Admissions Consultation page at /en/admissions-consultation or call 0238 3855 452.",
 }
 
 

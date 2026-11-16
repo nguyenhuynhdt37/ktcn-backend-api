@@ -1,109 +1,188 @@
-"""Nội dung tĩnh của website (trang Giới thiệu) lấy từ messages/{vi,en}.json của frontend.
+"""Nội dung tĩnh của website (trang Giới thiệu & Thông tin liên hệ) cho chatbot."""
 
-Sinh một lần từ khóa `about` trong messages; cập nhật tại đây khi trang Giới thiệu đổi nội dung.
-"""
-
-STATIC_ABOUT = {'vi': '## Giới thiệu trường (/vi/gioi-thieu)\n'
-       'Trường Kỹ thuật và Công nghệ (School of Engineering and Technology – SET) là đơn vị đào tạo trực '
-       'thuộc Trường Đại học Vinh, được thành lập năm 2026 trên cơ sở nâng cấp Viện Kỹ thuật và Công nghệ '
-       '(thành lập 4/2017). Trường kế thừa hơn 20 năm truyền thống đào tạo các ngành kỹ thuật, công nghệ '
-       'chất lượng cao của Trường Đại học Vinh.\n'
-       'Với đội ngũ giảng viên gồm nhiều Giáo sư, Phó Giáo sư, Tiến sĩ có trình độ chuyên môn cao, hệ thống '
-       'cơ sở vật chất hiện đại và mạng lưới hợp tác quốc tế rộng khắp, Trường Kỹ thuật và Công nghệ là địa '
-       'chỉ đào tạo uy tín hàng đầu khu vực Bắc Trung Bộ trong lĩnh vực Công nghệ thông tin, Kỹ thuật Điện - '
-       'Điện tử, Tự động hóa, Kỹ thuật Ô tô và Công nghệ Nhiệt.\n'
-       'Trường cam kết đào tạo nguồn nhân lực chất lượng cao, đáp ứng nhu cầu chuyển đổi số và cách mạng '
-       'công nghiệp 4.0, hướng tới mục tiêu trở thành trung tâm đào tạo và nghiên cứu kỹ thuật và công nghệ '
-       'hàng đầu khu vực.\n'
-       'Các mốc lịch sử:\n'
-       '- 2002: Đặt nền móng đào tạo KT&CN — Trường Đại học Vinh chính thức mở và tuyển sinh khóa đầu tiên '
-       'các ngành Công nghệ Thông tin và Kỹ thuật Điện tử - Viễn thông, đặt nền móng lịch sử cho khối ngành '
-       'công nghệ mũi nhọn.\n'
-       '- 2007: Mở rộng ngành đào tạo — Bổ sung các ngành Công nghệ kỹ thuật Điện - Điện tử, Tự động hóa. '
-       'Quy mô sinh viên tăng nhanh, khẳng định vị thế đào tạo kỹ thuật hàng đầu khu vực Bắc Trung Bộ.\n'
-       '- 2013: Triển khai chương trình CDIO — Áp dụng phương pháp đào tạo theo chuẩn CDIO quốc tế (Conceive '
-       '– Design – Implement – Operate), nâng cao chất lượng thực hành và năng lực làm việc thực tế cho sinh '
-       'viên.\n'
-       '- 2017: Thành lập Viện KT&CN — Tháng 4/2017, Viện Kỹ thuật và Công nghệ được thành lập trên cơ sở '
-       'sáp nhập các ngành đào tạo kỹ thuật từ Khoa Vật lý - Công nghệ cũ, tạo bước đột phá mạnh mẽ.\n'
-       '- 2023: Kiểm định chất lượng giáo dục — Đạt chuẩn kiểm định chất lượng giáo dục theo tiêu chuẩn của '
-       'Bộ Giáo dục và Đào tạo, khẳng định uy tín và chất lượng đào tạo.\n'
-       '- 2026: Nâng cấp thành Trường KT&CN — Chính thức công bố quyết định thành lập Trường Kỹ thuật và '
-       'Công nghệ trực thuộc Trường Đại học Vinh. Bước ngoặt lịch sử mở ra kỷ nguyên mới.\n'
-       'Sứ mệnh: Đào tạo nguồn nhân lực kỹ thuật, công nghệ chất lượng cao; nghiên cứu khoa học và chuyển '
-       'giao công nghệ tiên tiến; góp phần thúc đẩy sự phát triển kinh tế - xã hội khu vực Bắc Trung Bộ và '
-       'cả nước.\n'
-       'Tầm nhìn: Đến năm 2030, trở thành trung tâm đào tạo và nghiên cứu kỹ thuật, công nghệ uy tín hàng '
-       'đầu khu vực; hướng tới chuẩn mực quốc tế, đóng góp vào mục tiêu đưa Trường Đại học Vinh vào tốp 500 '
-       'đại học châu Á.\n'
-       'Giá trị cốt lõi: Chất lượng – Sáng tạo – Hội nhập – Trách nhiệm. Lấy người học làm trung tâm, lấy '
-       'nghiên cứu dẫn dắt đào tạo, lấy hợp tác quốc tế mở rộng tri thức.\n'
-       'Triết lý giáo dục: Kiến tạo - Thực tiễn - Sáng tạo - Hội nhập — Đào tạo người học phát triển toàn '
-       'diện, có năng lực thích ứng cao, có tư duy sáng tạo độc lập và khả năng hội nhập hiệu quả vào thị '
-       'trường lao động toàn cầu.\n'
-       'Cơ sở vật chất: Trường sở hữu hệ thống cơ sở vật chất hiện đại, đáp ứng yêu cầu đào tạo theo tiếp '
-       'cận CDIO, phục vụ công tác giảng dạy và nghiên cứu.\n'
-       '- Phòng thí nghiệm chuyên sâu: Hơn 15 phòng Lab chuyên sâu: Lab CNTT, Lab Mạng, Lab Điện - Điện tử, '
-       'Lab Tự động hóa, Lab Ô tô, Lab Nhiệt - Điện lạnh.\n'
-       '- Hạ tầng mạng & Wifi: Wifi phủ sóng toàn campus, hệ thống mạng LAN tốc độ cao phục vụ giảng dạy và '
-       'nghiên cứu.\n'
-       '- Thư viện số: Thư viện số với hàng chục ngàn tài liệu, sách điện tử và truy cập cơ sở dữ liệu quốc '
-       'tế.\n'
-       '- Hệ thống Đại học số: Nền tảng Đại học số toàn diện: quản lý đào tạo, tài chính, thư viện số và '
-       'quản lý khoa học.',
- 'en': '## About the College (/en/about)\n'
-       'The School of Engineering and Technology (SET) is a training unit under Vinh University, established '
-       'in 2026 by upgrading the Institute of Engineering and Technology (founded April 2017). The school '
-       'inherits over 20 years of tradition in training high-quality engineering and technology programs.\n'
-       'With a faculty team comprising Professors, Associate Professors, and Doctors with high professional '
-       'qualifications, modern facilities, and an extensive international cooperation network, SET is the '
-       'leading prestigious training institution in the North Central region.\n'
-       'The school is committed to training high-quality human resources, meeting the needs of digital '
-       'transformation and Industry 4.0, aiming to become the leading center for engineering and technology '
-       'training and research in the region.\n'
-       'Milestones:\n'
-       '- 2002: Foundation of ET training — Vinh University officially opened and enrolled the first cohort '
-       'in Information Technology and Electronics - Telecommunications Engineering, laying the historical '
-       'foundation for the key technology sector.\n'
-       '- 2007: Program expansion — Added Electrical - Electronics Engineering and Automation programs. '
-       'Student enrollment grew rapidly, affirming the leading technical training position in the North '
-       'Central region.\n'
-       '- 2013: CDIO implementation — Applied the international CDIO training methodology (Conceive – Design '
-       '– Implement – Operate), enhancing practical quality and real-world working capability for students.\n'
-       '- 2017: Institute of ET established — In April 2017, the Institute of Engineering and Technology was '
-       'established by merging technical training programs from the former Faculty of Physics - Technology, '
-       'creating a major breakthrough.\n'
-       '- 2023: Education quality accreditation — Achieved education quality accreditation standards set by '
-       'the Ministry of Education and Training, affirming training reputation and quality.\n'
-       '- 2026: Upgraded to School of ET — Officially announced the establishment of the School of '
-       'Engineering and Technology under Vinh University. A historic turning point opening a new era.\n'
-       'Mission: To train high-quality human resources in engineering and technology; to conduct advanced '
-       'research and technology transfer; contributing to the socio-economic development of the North '
-       'Central region and the country.\n'
-       'Vision: By 2030, to become a leading prestigious center for engineering and technology education and '
-       "research in the region; aiming at international standards and contributing to Vinh University's goal "
-       'of entering the top 500 Asian universities.\n'
-       'Core values: Quality - Creativity - Integration - Responsibility. Learner-centered, research-driven, '
-       'and internationally collaborative.\n'
-       'Educational Philosophy: Constructiveness - Practice - Creativity - Integration — Cultivating '
-       'well-rounded learners with high adaptability, independent creative thinking, and the capability to '
-       'integrate effectively into the global workforce.\n'
-       'Facilities: The school possesses a modern facility system meeting CDIO training requirements, '
-       'serving teaching and scientific research activities.\n'
-       '- Specialized Laboratories: Over 15 specialized labs: IT Lab, Network Lab, Electrical-Electronics '
-       'Lab, Automation Lab, Automotive Lab, HVAC Lab.\n'
-       '- Network & WiFi Infrastructure: Campus-wide WiFi coverage, high-speed LAN network system for '
-       'teaching and research.\n'
-       '- Digital Library: Digital library with tens of thousands of documents, e-books and access to '
-       'international databases.\n'
-       '- Digital University System: Comprehensive digital university platform: training management, '
-       'finance, digital library and science management.'}
+STATIC_ABOUT = {
+    "vi": (
+        "## Giới thiệu trường (/vi/gioi-thieu)\n"
+        "Trường Kỹ thuật và Công nghệ (School of Engineering and Technology – SET) là đơn vị đào tạo trực "
+        "thuộc Trường Đại học Vinh, được thành lập năm 2026 trên cơ sở nâng cấp Viện Kỹ thuật và Công nghệ "
+        "(thành lập 4/2017). Trường kế thừa hơn 20 năm truyền thống đào tạo các ngành kỹ thuật, công nghệ "
+        "chất lượng cao của Trường Đại học Vinh.\n"
+        "Với đội ngũ giảng viên gồm nhiều Giáo sư, Phó Giáo sư, Tiến sĩ có trình độ chuyên môn cao, hệ thống "
+        "cơ sở vật chất hiện đại và mạng lưới hợp tác quốc tế rộng khắp, Trường Kỹ thuật và Công nghệ là địa "
+        "chỉ đào tạo uy tín hàng đầu khu vực Bắc Trung Bộ trong lĩnh vực Công nghệ thông tin, Kỹ thuật Điện - "
+        "Điện tử, Tự động hóa, Kỹ thuật Ô tô và Công nghệ Nhiệt.\n"
+        "Trường cam kết đào tạo nguồn nhân lực chất lượng cao, đáp ứng nhu cầu chuyển đổi số và cách mạng "
+        "công nghiệp 4.0, hướng tới mục tiêu trở thành trung tâm đào tạo và nghiên cứu kỹ thuật và công nghệ "
+        "hàng đầu khu vực.\n"
+        "Các mốc lịch sử:\n"
+        "- 2002: Đặt nền móng đào tạo KT&CN — Trường Đại học Vinh chính thức mở và tuyển sinh khóa đầu tiên "
+        "các ngành Công nghệ Thông tin và Kỹ thuật Điện tử - Viễn thông, đặt nền móng lịch sử cho khối ngành "
+        "công nghệ mũi nhọn.\n"
+        "- 2007: Mở rộng ngành đào tạo — Bổ sung các ngành Công nghệ kỹ thuật Điện - Điện tử, Tự động hóa. "
+        "Quy mô sinh viên tăng nhanh, khẳng định vị thế đào tạo kỹ thuật hàng đầu khu vực Bắc Trung Bộ.\n"
+        "- 2013: Triển khai chương trình CDIO — Áp dụng phương pháp đào tạo theo chuẩn CDIO quốc tế (Conceive "
+        "– Design – Implement – Operate), nâng cao chất lượng thực hành và năng lực làm việc thực tế cho sinh "
+        "viên.\n"
+        "- 2017: Thành lập Viện KT&CN — Tháng 4/2017, Viện Kỹ thuật và Công nghệ được thành lập trên cơ sở "
+        "sáp nhập các ngành đào tạo kỹ thuật từ Khoa Vật lý - Công nghệ cũ, tạo bước đột phá mạnh mẽ.\n"
+        "- 2023: Kiểm định chất lượng giáo dục — Đạt chuẩn kiểm định chất lượng giáo dục theo tiêu chuẩn của "
+        "Bộ Giáo dục và Đào tạo, khẳng định uy tín và chất lượng đào tạo.\n"
+        "- 2026: Nâng cấp thành Trường KT&CN — Chính thức công bố quyết định thành lập Trường Kỹ thuật và "
+        "Công nghệ trực thuộc Trường Đại học Vinh. Bước ngoặt lịch sử mở ra kỷ nguyên mới.\n"
+        "Sứ mệnh: Đào tạo nguồn nhân lực kỹ thuật, công nghệ chất lượng cao; nghiên cứu khoa học và chuyển "
+        "giao công nghệ tiên tiến; góp phần thúc đẩy sự phát triển kinh tế - xã hội khu vực Bắc Trung Bộ và "
+        "cả nước.\n"
+        "Tầm nhìn: Đến năm 2030, trở thành trung tâm đào tạo và nghiên cứu kỹ thuật, công nghệ uy tín hàng "
+        "đầu khu vực; hướng tới chuẩn mực quốc tế, đóng góp vào mục tiêu đưa Trường Đại học Vinh vào tốp 500 "
+        "đại học châu Á.\n"
+        "Giá trị cốt lõi: Chất lượng – Sáng tạo – Hội nhập – Trách nhiệm. Lấy người học làm trung tâm, lấy "
+        "nghiên cứu dẫn dắt đào tạo, lấy hợp tác quốc tế mở rộng tri thức.\n"
+        "Triết lý giáo dục: Kiến tạo - Thực tiễn - Sáng tạo - Hội nhập — Đào tạo người học phát triển toàn "
+        "diện, có năng lực thích ứng cao, có tư duy sáng tạo độc lập và khả năng hội nhập hiệu quả vào thị "
+        "trường lao động toàn cầu.\n"
+        "Cơ sở vật chất: Trường sở hữu hệ thống cơ sở vật chất hiện đại, đáp ứng yêu cầu đào tạo theo tiếp "
+        "cận CDIO, phục vụ công tác giảng dạy và nghiên cứu.\n"
+        "- Phòng thí nghiệm chuyên sâu: Hơn 15 phòng Lab chuyên sâu: Lab CNTT, Lab Mạng, Lab Điện - Điện tử, "
+        "Lab Tự động hóa, Lab Ô tô, Lab Nhiệt - Điện lạnh.\n"
+        "- Hạ tầng mạng & Wifi: Wifi phủ sóng toàn campus, hệ thống mạng LAN tốc độ cao phục vụ giảng dạy và "
+        "nghiên cứu.\n"
+        "- Thư viện số: Thư viện số với hàng chục ngàn tài liệu, sách điện tử và truy cập cơ sở dữ liệu quốc "
+        "tế.\n"
+        "- Hệ thống Đại học số: Nền tảng Đại học số toàn diện: quản lý đào tạo, tài chính, thư viện số và "
+        "quản lý khoa học."
+    ),
+    "en": (
+        "## About the College (/en/about)\n"
+        "The School of Engineering and Technology (SET) is a training unit under Vinh University, established "
+        "in 2026 by upgrading the Institute of Engineering and Technology (founded April 2017). The school "
+        "inherits over 20 years of tradition in training high-quality engineering and technology programs.\n"
+        "With a faculty team comprising Professors, Associate Professors, and Doctors with high professional "
+        "qualifications, modern facilities, and an extensive international cooperation network, SET is the "
+        "leading prestigious training institution in the North Central region.\n"
+        "The school is committed to training high-quality human resources, meeting the needs of digital "
+        "transformation and Industry 4.0, aiming to become the leading center for engineering and technology "
+        "training and research in the region.\n"
+        "Milestones:\n"
+        "- 2002: Foundation of ET training — Vinh University officially opened and enrolled the first cohort "
+        "in Information Technology and Electronics - Telecommunications Engineering, laying the historical "
+        "foundation for the key technology sector.\n"
+        "- 2007: Program expansion — Added Electrical - Electronics Engineering and Automation programs. "
+        "Student enrollment grew rapidly, affirming the leading technical training position in the North "
+        "Central region.\n"
+        "- 2013: CDIO implementation — Applied the international CDIO training methodology (Conceive – Design "
+        "– Implement – Operate), enhancing practical quality and real-world working capability for students.\n"
+        "- 2017: Institute of ET established — In April 2017, the Institute of Engineering and Technology was "
+        "established by merging technical training programs from the former Faculty of Physics - Technology, "
+        "creating a major breakthrough.\n"
+        "- 2023: Education quality accreditation — Achieved education quality accreditation standards set by "
+        "the Ministry of Education and Training, affirming training reputation and quality.\n"
+        "- 2026: Upgraded to School of ET — Officially announced the establishment of the School of "
+        "Engineering and Technology under Vinh University. A historic turning point opening a new era.\n"
+        "Mission: To train high-quality human resources in engineering and technology; to conduct advanced "
+        "research and technology transfer; contributing to the socio-economic development of the North "
+        "Central region and the country.\n"
+        "Vision: By 2030, to become a leading prestigious center for engineering and technology education and "
+        "research in the region; aiming at international standards and contributing to Vinh University's goal "
+        "of entering the top 500 Asian universities.\n"
+        "Core values: Quality - Creativity - Integration - Responsibility. Learner-centered, research-driven, "
+        "and internationally collaborative.\n"
+        "Educational Philosophy: Constructiveness - Practice - Creativity - Integration — Cultivating "
+        "well-rounded learners with high adaptability, independent creative thinking, and the capability to "
+        "integrate effectively into the global workforce.\n"
+        "Facilities: The school possesses a modern facility system meeting CDIO training requirements, "
+        "serving teaching and scientific research activities.\n"
+        "- Specialized Laboratories: Over 15 specialized labs: IT Lab, Network Lab, Electrical-Electronics "
+        "Lab, Automation Lab, Automotive Lab, HVAC Lab.\n"
+        "- Network & WiFi Infrastructure: Campus-wide WiFi coverage, high-speed LAN network system for "
+        "teaching and research.\n"
+        "- Digital Library: Digital library with tens of thousands of documents, e-books and access to "
+        "international databases.\n"
+        "- Digital University System: Comprehensive digital university platform: training management, "
+        "finance, digital library and science management."
+    ),
+}
 
 STATIC_CONTACT = {
-    "vi": "## Địa chỉ\n- Địa chỉ trường: 182 Lê Duẩn, Thành phố Vinh, Nghệ An (Trường Đại học Vinh).\n"
-          "- Tư vấn tuyển sinh: Tầng 2, Nhà A0, Trường Kỹ thuật và Công nghệ - Trường Đại học Vinh, 182 Lê Duẩn, TP. Vinh, Nghệ An. "
-          "Biểu mẫu đăng ký tư vấn: /vi/tu-van-tuyen-sinh",
-    "en": "## Address\n- School address: 182 Le Duan, Vinh City, Nghe An (Vinh University).\n"
-          "- Admissions advice: 2nd floor, Building A0, College of Engineering and Technology - Vinh University, "
-          "182 Le Duan, Vinh City, Nghe An. Registration form: /en/tu-van-tuyen-sinh",
+    "vi": (
+        "## Địa chỉ & Thông tin liên hệ chính thức\n"
+        "- Đơn vị: Trường Kỹ thuật và Công nghệ - Trường Đại học Vinh\n"
+        "- Địa chỉ trường: 182 Lê Duẩn, Thành phố Vinh, Nghệ An (Trường Đại học Vinh).\n"
+        "- Điện thoại: 0238 3855 452\n"
+        "- Email: vienktcn@vinhuni.edu.vn\n"
+        "- Website: https://ktcn.itup.io.vn\n"
+        "- Facebook Fanpage: https://www.facebook.com/Vienktcn\n"
+        "- Phụ trách Trường / Chịu trách nhiệm nội dung: PGS. TS. Hoàng Hữu Việt — Phó Hiệu trưởng, phụ trách Trường\n"
+        "- Tư vấn tuyển sinh trực tiếp: Tầng 2, Nhà A0, Trường Kỹ thuật và Công nghệ - Trường Đại học Vinh, 182 Lê Duẩn, TP. Vinh, Nghệ An. "
+        "Biểu mẫu đăng ký tư vấn trực tuyến: /vi/tu-van-tuyen-sinh"
+    ),
+    "en": (
+        "## Official Address & Contact Information\n"
+        "- Institution: College of Engineering and Technology - Vinh University\n"
+        "- School address: 182 Le Duan, Vinh City, Nghe An (Vinh University).\n"
+        "- Phone: 0238 3855 452\n"
+        "- Email: vienktcn@vinhuni.edu.vn\n"
+        "- Website: https://ktcn.itup.io.vn\n"
+        "- Facebook Fanpage: https://www.facebook.com/Vienktcn\n"
+        "- Acting Head / Content Manager: Assoc. Prof. Dr. Hoang Huu Viet — Vice Rector\n"
+        "- In-person admissions advice: 2nd floor, Building A0, College of Engineering and Technology - Vinh University, "
+        "182 Le Duan, Vinh City, Nghe An. Online consultation form: /en/admissions-consultation"
+    ),
 }
+
+
+def build_contact_knowledge(settings_obj, lang: str) -> str:
+    """Xây dựng khối thông tin liên hệ chính thức của Trường từ cấu hình hệ thống."""
+    if not settings_obj:
+        return STATIC_CONTACT.get(lang) or STATIC_CONTACT["vi"]
+
+    vi = lang != "en"
+    college_name = (
+        getattr(settings_obj, "college_name_vi", None)
+        if vi
+        else getattr(settings_obj, "college_name_en", None)
+    ) or (
+        "Trường Kỹ thuật và Công nghệ - Trường Đại học Vinh"
+        if vi
+        else "College of Engineering and Technology - Vinh University"
+    )
+    address = (
+        getattr(settings_obj, "address_vi", None)
+        if vi
+        else getattr(settings_obj, "address_en", None)
+    ) or ("182 Lê Duẩn, Thành phố Vinh, Nghệ An" if vi else "182 Le Duan, Vinh City, Nghe An")
+    phone = getattr(settings_obj, "phone", None) or "0238 3855 452"
+    email = getattr(settings_obj, "email", None) or "vienktcn@vinhuni.edu.vn"
+    website_raw = getattr(settings_obj, "website", None) or "ktcn.itup.io.vn"
+    website = website_raw if website_raw.startswith(("http://", "https://")) else f"https://{website_raw}"
+    facebook_url = getattr(settings_obj, "facebook_url", None) or "https://www.facebook.com/Vienktcn"
+    responsible = (
+        getattr(settings_obj, "responsible_officer_vi", None)
+        if vi
+        else getattr(settings_obj, "responsible_officer_en", None)
+    ) or ("PGS. TS. Hoàng Hữu Việt - Hiệu phó" if vi else "Assoc. Prof. Dr. Hoang Huu Viet - Vice Rector")
+
+    if vi:
+        return (
+            "## Địa chỉ & Thông tin liên hệ chính thức\n"
+            f"- Đơn vị: {college_name}\n"
+            f"- Địa chỉ trường: {address} (Trường Đại học Vinh).\n"
+            f"- Điện thoại: {phone}\n"
+            f"- Email: {email}\n"
+            f"- Website: {website}\n"
+            f"- Facebook Fanpage: {facebook_url}\n"
+            f"- Phụ trách Trường / Chịu trách nhiệm nội dung: {responsible}\n"
+            f"- Tư vấn tuyển sinh trực tiếp: Tầng 2, Nhà A0, Trường Kỹ thuật và Công nghệ - Trường Đại học Vinh, {address}. "
+            "Biểu mẫu đăng ký tư vấn trực tuyến: /vi/tu-van-tuyen-sinh"
+        )
+    return (
+        "## Official Address & Contact Information\n"
+        f"- Institution: {college_name}\n"
+        f"- School address: {address} (Vinh University).\n"
+        f"- Phone: {phone}\n"
+        f"- Email: {email}\n"
+        f"- Website: {website}\n"
+        f"- Facebook Fanpage: {facebook_url}\n"
+        f"- Acting Head / Content Manager: {responsible}\n"
+        f"- In-person admissions advice: 2nd floor, Building A0, College of Engineering and Technology - Vinh University, {address}. "
+        "Online consultation form: /en/admissions-consultation"
+    )

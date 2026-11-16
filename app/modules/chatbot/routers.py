@@ -5,7 +5,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.exceptions import TooManyRequestsException
-from app.modules.chatbot.knowledge import CoreKnowledgeCache, search_articles
+from app.modules.chatbot.knowledge import (
+    CoreKnowledgeCache,
+    match_staff_for_question,
+    search_articles,
+)
 from app.modules.chatbot.schemas import ChatRequest, ChatResponse
 from app.modules.chatbot.service import ChatbotService
 from app.modules.chatbot.session import ChatSessionStore
@@ -19,15 +23,14 @@ portal_router = APIRouter()
 _ai_service: AIService | None = None
 _knowledge_cache: CoreKnowledgeCache | None = None
 
-LEADERSHIP_SLUG = "ban-lanh-dao-vien"
 
-
-def format_contact(department) -> str | None:
+def format_contact(settings_obj) -> str | None:
     parts = []
     for label, value in (
-        ("Điện thoại", getattr(department, "phone", None)),
-        ("Email", getattr(department, "email", None)),
-        ("Văn phòng", getattr(department, "office", None)),
+        ("Điện thoại", getattr(settings_obj, "phone", None)),
+        ("Email", getattr(settings_obj, "email", None)),
+        ("Địa chỉ", getattr(settings_obj, "address_vi", None)),
+        ("Tư vấn tuyển sinh", "/vi/tu-van-tuyen-sinh"),
     ):
         if value:
             parts.append(f"{label}: {value}")
@@ -35,10 +38,16 @@ def format_contact(department) -> str | None:
 
 
 async def _leadership_contact(db) -> str | None:
-    from app.modules.department.service import department_service
+    from app.modules.setting.service import setting_service
 
-    department = await department_service.get_department_by_slug(db, LEADERSHIP_SLUG, lang="vi")
-    return format_contact(department)
+    site_settings = await setting_service.get_site_settings(db)
+    return format_contact(site_settings)
+
+
+async def invalidate_knowledge_cache() -> None:
+    """Xóa cache tri thức chatbot khi thông tin cấu hình website thay đổi."""
+    if _knowledge_cache is not None:
+        await _knowledge_cache.clear()
 
 
 def get_chatbot_service(
@@ -53,7 +62,14 @@ def get_chatbot_service(
     store = ChatSessionStore(
         redis_client, settings.CHATBOT_SESSION_TTL_SECONDS, settings.CHATBOT_HISTORY_TURNS
     )
-    return ChatbotService(_ai_service, store, _knowledge_cache, search_articles, _leadership_contact)
+    return ChatbotService(
+        _ai_service,
+        store,
+        _knowledge_cache,
+        search_articles,
+        _leadership_contact,
+        match_staff_for_question,
+    )
 
 
 @portal_router.post("/messages", response_model=ChatResponse)
