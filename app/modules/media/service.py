@@ -1,22 +1,24 @@
 import hashlib
+import html
 import io
 import re
+import threading
 import uuid
+from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import quote
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+
 import boto3
+from anyio.to_thread import run_sync
 from botocore.config import Config
 from loguru import logger
 from PIL import Image
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from anyio.to_thread import run_sync
 
 from app.core.config import settings
 from app.core.exceptions import BadRequestException, NotFoundException
 from app.modules.media.models import MediaItem
-
 
 # Content types a browser executes as a document/script. Served from the API
 # origin they would run with the admin's session, so they are never accepted.
@@ -49,12 +51,29 @@ INLINE_SAFE_CONTENT_TYPES = frozenset({
 })
 
 SVG_DANGEROUS_PATTERN = re.compile(
-    r"<\s*(script|foreignobject|iframe|embed|object|handler|listener)\b"  # active elements
-    r"|\bon[a-z]+\s*="                 # any event handler (onload, onbegin, ...)
-    r"|(javascript|vbscript)\s*:"       # script URLs
-    r"|data\s*:\s*text/html"            # embedded HTML documents
-    r"|<!entity",                       # XML entity tricks
+    r"<\s*(script|foreignobject|iframe|embed|object|handler|listener)\b"
+    r"|\bon[a-z]+\s*="  # any event handler (onload, onbegin, ...)
+    r"|(javascript|vbscript)\s*:"  # script URLs
+    r"|data\s*:\s*(text/html|image/svg\+xml)"  # embedded HTML/SVG documents
+    r"|<!entity"  # XML entity tricks
+    r"|<\?\s*xml-stylesheet",  # external XSL stylesheets
 )
+
+
+def sanitize_media_filename(filename: str | None, max_length: int = 255) -> str:
+    """Chuẩn hóa tên file upload: loại bỏ path, ký tự điều khiển và giới hạn độ dài."""
+    raw = (filename or "").replace("\\", "/").split("/")[-1]
+    cleaned = re.sub(r"[\x00-\x1f\x7f]+", "", raw).strip()
+    if not cleaned or cleaned in (".", ".."):
+        return "unnamed"
+    if len(cleaned) <= max_length:
+        return cleaned
+    if "." in cleaned:
+        stem, dot, ext = cleaned.rpartition(".")
+        if stem and len(ext) <= 20:
+            keep = max_length - len(ext) - 1
+            return f"{stem[:keep]}.{ext}" if keep > 0 else cleaned[:max_length]
+    return cleaned[:max_length]
 
 
 def normalize_content_type(content_type: str | None) -> str:
@@ -68,14 +87,24 @@ def is_active_content_type(content_type: str | None) -> bool:
     return normalized in ACTIVE_CONTENT_TYPES or normalized.endswith(("+xml", "html"))
 
 
-def build_content_disposition(filename: str | None, disposition: str = "attachment") -> str:
+def build_content_disposition(
+    filename: str | None, disposition: str = "attachment"
+) -> str:
     """RFC 6266 header value that survives non-ASCII (Vietnamese) file names."""
     name = (filename or "download").replace("\r", " ").replace("\n", " ")
     ascii_fallback = (
-        name.encode("ascii", "ignore").decode("ascii").replace("\\", "_").replace('"', "_").strip()
+        name.encode("ascii", "ignore")
+        .decode("ascii")
+        .replace("\\", "_")
+        .replace('"', "_")
+        .strip()
         or "download"
     )
-    return f"{disposition}; filename=\"{ascii_fallback}\"; filename*=UTF-8''{quote(name, safe='')}"
+    encoded_name = quote(name, safe="")
+    return (
+        f'{disposition}; filename="{ascii_fallback}"; '
+        f"filename*=UTF-8''{encoded_name}"
+    )
 
 
 def build_public_media_headers(content_type: str | None) -> tuple[str, dict[str, str]]:
@@ -100,11 +129,11 @@ def build_public_media_headers(content_type: str | None) -> tuple[str, dict[str,
 
 def validate_magic_bytes(content: bytes, content_type: str) -> bool:
     """
-    Validates that the file contents match the expected MIME type signature (Magic Bytes).
+    Validates that the file contents match the expected MIME signature (Magic Bytes).
     """
     if not content:
         return False
-        
+
     # Standard signatures (Magic Bytes)
     if content_type.startswith("image/png"):
         return content.startswith(b"\x89PNG\r\n\x1a\n")
@@ -122,7 +151,7 @@ def validate_magic_bytes(content: bytes, content_type: str) -> bool:
             return "<svg" in text
         except Exception:
             return False
-            
+
     # Allow other files without validation (like docx, xlsx, etc. or dynamic validation)
     return True
 
@@ -132,21 +161,35 @@ def check_svg_safety(content: bytes) -> bool:
     Scans SVG content for potential XSS payloads like script tags or onload attributes.
     """
     try:
-        if content[:2] in (b"\xff\xfe", b"\xfe\xff"):
-            return False  # UTF-16 would hide markup from the scan below
+        if content[:2] in (b"\xff\xfe", b"\xfe\xff") or content[:4] in (
+            b"\x00\x00\xfe\xff",
+            b"\xff\xfe\x00\x00",
+        ):
+            return False  # UTF-16/UTF-32 would hide markup from the scan below
         text = content.decode("utf-8", errors="ignore").lower()
-        return SVG_DANGEROUS_PATTERN.search(text) is None
+        if SVG_DANGEROUS_PATTERN.search(text) is not None:
+            return False
+        unescaped = html.unescape(text).lower()
+        if SVG_DANGEROUS_PATTERN.search(unescaped) is not None:
+            return False
+        compact = re.sub(r"[\x00-\x20\x7f]+", "", unescaped)
+        danger_scheme = r"(javascript|vbscript|data:(text/html|image/svg\+xml)):"
+        if re.search(danger_scheme, compact):
+            return False
+        return True
     except Exception:
         return False
 
 
 def sanitize_image_metadata(file_content: bytes) -> tuple[bytes, int, int]:
     """
-    Loads image with Pillow, strips EXIF metadata, and returns clean bytes, width, and height.
-    Runs inside a threadpool.
+    Loads image with Pillow, strips EXIF metadata, and returns clean bytes,
+    width, and height. Runs inside a threadpool.
     """
     img = Image.open(io.BytesIO(file_content))
-    
+    if img.width * img.height > 50_000_000:
+        raise ValueError("Image pixel dimensions exceed safety limit")
+
     # Auto rotate based on EXIF orientation if available
     try:
         from PIL import ImageOps
@@ -155,7 +198,7 @@ def sanitize_image_metadata(file_content: bytes) -> tuple[bytes, int, int]:
         pass
 
     width, height = img.width, img.height
-    
+
     # Re-save to strip metadata (EXIF is not passed)
     out_io = io.BytesIO()
     img_format = img.format or "PNG"
@@ -169,16 +212,38 @@ class MediaService:
     Encapsulates all logic for MinIO storage interaction and database file metadata.
     """
 
+    _init_lock = threading.Lock()
+
     def __init__(self) -> None:
-        # Initialize boto3 S3 Client configured for MinIO
-        self.s3_client = boto3.client(
-            "s3",
-            endpoint_url=f"http{'s' if settings.MINIO_SECURE else ''}://{settings.MINIO_INTERNAL_ENDPOINT}",
-            aws_access_key_id=settings.MINIO_ACCESS_KEY,
-            aws_secret_access_key=settings.MINIO_SECRET_KEY,
-            config=Config(signature_version="s3v4"),
-        )
-        self._ensure_bucket_exists()
+        self._s3_client: Any = None
+        self._bucket_checked: bool = False
+
+    @property
+    def s3_client(self) -> Any:
+        client = getattr(self, "_s3_client", None)
+        if client is None:
+            with self._init_lock:
+                client = getattr(self, "_s3_client", None)
+                if client is None:
+                    scheme = "https" if settings.MINIO_SECURE else "http"
+                    endpoint = f"{scheme}://{settings.MINIO_INTERNAL_ENDPOINT}"
+                    client = boto3.client(
+                        "s3",
+                        endpoint_url=endpoint,
+                        aws_access_key_id=settings.MINIO_ACCESS_KEY,
+                        aws_secret_access_key=settings.MINIO_SECRET_KEY,
+                        config=Config(signature_version="s3v4"),
+                    )
+                    self._s3_client = client
+                    if not getattr(self, "_bucket_checked", False):
+                        self._bucket_checked = True
+                        self._ensure_bucket_exists()
+        return client
+
+    @s3_client.setter
+    def s3_client(self, value: Any) -> None:
+        self._s3_client = value
+        self._bucket_checked = True
 
     def _ensure_bucket_exists(self) -> None:
         """
@@ -213,14 +278,16 @@ class MediaService:
                     }
                 ]
             }
-            self.s3_client.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
+            self.s3_client.put_bucket_policy(
+                Bucket=bucket_name, Policy=json.dumps(policy)
+            )
         except Exception as e:
             logger.warning(f"Không thể cập nhật policy cho bucket '{bucket_name}': {e}")
 
     # ─── Folder Management ────────────────────────────────────────────────────
 
     async def create_folder(
-        self, db: AsyncSession, name: str, parent_id: Optional[uuid.UUID] = None
+        self, db: AsyncSession, name: str, parent_id: uuid.UUID | None = None
     ) -> MediaItem:
         """
         Creates a logical directory in the database.
@@ -239,8 +306,8 @@ class MediaService:
         return folder
 
     async def list_directory(
-        self, db: AsyncSession, parent_id: Optional[uuid.UUID] = None
-    ) -> List[MediaItem]:
+        self, db: AsyncSession, parent_id: uuid.UUID | None = None
+    ) -> list[MediaItem]:
         """
         Lists files and subdirectories located inside a specific parent folder.
         """
@@ -257,23 +324,27 @@ class MediaService:
 
     # ─── File Management ──────────────────────────────────────────────────────
 
-    async def upload_file(
+    async def upload_file(  # noqa: C901
         self,
         db: AsyncSession,
         file_content: bytes,
         filename: str,
         content_type: str,
-        parent_id: Optional[uuid.UUID] = None,
+        parent_id: uuid.UUID | None = None,
     ) -> MediaItem:
         """
-        Uploads file to MinIO, calculates metadata/dimensions, generates thumbnail if image,
+        Uploads file to MinIO, calculates metadata/dimensions, generates thumbnail,
         and saves registry to Database.
         """
         if parent_id:
             await self._verify_parent_exists_and_is_folder(db, parent_id)
 
+        safe_filename = sanitize_media_filename(filename)
+
         # 0. Security Validations
-        content_type = normalize_content_type(content_type) or "application/octet-stream"
+        content_type = (
+            normalize_content_type(content_type) or "application/octet-stream"
+        )
         if is_active_content_type(content_type):
             raise BadRequestException(
                 message="Định dạng tập tin này không được phép tải lên.",
@@ -310,7 +381,7 @@ class MediaService:
                 raise BadRequestException(
                     message="Tập tin hình ảnh không hợp lệ hoặc bị lỗi.",
                     error_code="INVALID_IMAGE_FILE",
-                )
+                ) from e
 
         # Compute checksum and file details after sanitization
         size = len(file_content)
@@ -323,7 +394,7 @@ class MediaService:
                 _, _, thumbnail_bytes = await run_sync(
                     self._process_image_and_thumbnail, file_content
                 )
-                
+
                 # If thumbnail was generated, upload to MinIO
                 if thumbnail_bytes:
                     thumb_key = f"thumbs/{uuid.uuid4().hex}"
@@ -350,9 +421,9 @@ class MediaService:
             )
         )
 
-        # 4. Save to Database
+        # 4. Save to Database (clean up S3 objects if commit fails)
         media_item = MediaItem(
-            name=filename,
+            name=safe_filename,
             is_folder=False,
             parent_id=parent_id,
             object_key=object_key,
@@ -365,11 +436,29 @@ class MediaService:
             height=height,
         )
         db.add(media_item)
-        await db.commit()
-        await db.refresh(media_item)
-        return media_item
+        try:
+            await db.commit()
+            await db.refresh(media_item)
+            return media_item
+        except Exception:
+            await db.rollback()
+            for orphan_key in (object_key, thumbnail_key):
+                if orphan_key:
+                    try:
+                        await run_sync(
+                            lambda k=orphan_key: self.s3_client.delete_object(
+                                Bucket=settings.MINIO_BUCKET, Key=k
+                            )
+                        )
+                    except Exception as cleanup_err:
+                        logger.warning(
+                            f"Failed to clean S3 object '{orphan_key}': {cleanup_err}"
+                        )
+            raise
 
-    def _process_image_and_thumbnail(self, file_content: bytes) -> tuple[int, int, Optional[bytes]]:
+    def _process_image_and_thumbnail(
+        self, file_content: bytes
+    ) -> tuple[int, int, bytes | None]:
         """
         Extracts width/height and generates a max 200px thumbnail.
         Runs inside threadpool.
@@ -380,16 +469,18 @@ class MediaService:
         # Copy image and resize
         img_copy = img.copy()
         img_copy.thumbnail((200, 200))
-        
+
         # Save thumbnail to buffer
         thumb_io = io.BytesIO()
         # Default to PNG if format is missing
         img_format = img.format or "PNG"
         img_copy.save(thumb_io, format=img_format)
-        
+
         return width, height, thumb_io.getvalue()
 
-    async def get_file_stream(self, db: AsyncSession, media_id: uuid.UUID) -> tuple[bytes, str, str]:
+    async def get_file_stream(
+        self, db: AsyncSession, media_id: uuid.UUID
+    ) -> tuple[bytes, str, str]:
         """
         Retrieves a file's binary content, name, and mime-type for download.
         """
@@ -415,7 +506,7 @@ class MediaService:
             raise BadRequestException(
                 message="Lỗi truy xuất file từ hệ thống lưu trữ",
                 error_code="STORAGE_RETRIEVAL_ERROR",
-            )
+            ) from e
 
     # ─── Operations (Delete, Move, Copy, Rename) ──────────────────────────────
 
@@ -427,7 +518,7 @@ class MediaService:
         item = await self._get_item_or_raise(db, media_id)
 
         # 1. Collect files to delete in MinIO
-        files_to_delete: List[MediaItem] = []
+        files_to_delete: list[MediaItem] = []
         if item.is_folder:
             # Recursively collect all descendant files
             await self._collect_descendant_files(db, item.id, files_to_delete)
@@ -436,46 +527,53 @@ class MediaService:
 
         # 2. Delete S3 objects
         for file in files_to_delete:
+            bucket = file.bucket or settings.MINIO_BUCKET
             if file.object_key:
+                obj_key = file.object_key
                 try:
                     await run_sync(
-                        lambda: self.s3_client.delete_object(
-                            Bucket=file.bucket or settings.MINIO_BUCKET,
-                            Key=file.object_key,
+                        lambda b=bucket, k=obj_key: self.s3_client.delete_object(
+                            Bucket=b,
+                            Key=k,
                         )
                     )
                 except Exception as e:
-                    logger.warning(f"Lỗi xóa file '{file.object_key}' từ MinIO: {e}")
-            
+                    logger.warning(f"Lỗi xóa file '{obj_key}' từ MinIO: {e}")
+
             if file.thumbnail_key:
+                thumb_key = file.thumbnail_key
                 try:
                     await run_sync(
-                        lambda: self.s3_client.delete_object(
-                            Bucket=file.bucket or settings.MINIO_BUCKET,
-                            Key=file.thumbnail_key,
+                        lambda b=bucket, k=thumb_key: self.s3_client.delete_object(
+                            Bucket=b,
+                            Key=k,
                         )
                     )
                 except Exception as e:
-                    logger.warning(f"Lỗi xóa thumbnail '{file.thumbnail_key}' từ MinIO: {e}")
+                    logger.warning(
+                        f"Lỗi xóa thumbnail '{thumb_key}' từ MinIO: {e}"
+                    )
 
         # 3. Delete database record(s) - cascade handles child rows in DB
         await db.delete(item)
         await db.commit()
 
-    async def rename_item(self, db: AsyncSession, media_id: uuid.UUID, new_name: str) -> MediaItem:
+    async def rename_item(
+        self, db: AsyncSession, media_id: uuid.UUID, new_name: str
+    ) -> MediaItem:
         """
         Renames a logical file or directory (DB-only operation).
         """
         item = await self._get_item_or_raise(db, media_id)
         item.name = new_name
-        item.updated_at = datetime.now(timezone.utc)
+        item.updated_at = datetime.now(UTC)
         db.add(item)
         await db.commit()
         await db.refresh(item)
         return item
 
     async def move_item(
-        self, db: AsyncSession, media_id: uuid.UUID, new_parent_id: Optional[uuid.UUID]
+        self, db: AsyncSession, media_id: uuid.UUID, new_parent_id: uuid.UUID | None
     ) -> MediaItem:
         """
         Moves a file or directory to a different folder.
@@ -486,29 +584,37 @@ class MediaService:
         if new_parent_id:
             # 1. Verify destination exists and is a folder
             await self._verify_parent_exists_and_is_folder(db, new_parent_id)
-            
-            # 2. Prevent circular move (cannot move folder inside itself or its descendants)
+
+            # 2. Prevent circular move (into itself or its descendants)
             if item.is_folder:
-                is_descendant = await self._is_folder_descendant_of(db, new_parent_id, item.id)
+                is_descendant = await self._is_folder_descendant_of(
+                    db, new_parent_id, item.id
+                )
                 if media_id == new_parent_id or is_descendant:
                     raise BadRequestException(
-                        message="Không thể di chuyển thư mục vào chính nó hoặc thư mục con của nó",
+                        message=(
+                            "Không thể di chuyển thư mục vào chính nó "
+                            "hoặc thư mục con của nó"
+                        ),
                         error_code="CIRCULAR_MOVE_ERROR",
                     )
 
         item.parent_id = new_parent_id
-        item.updated_at = datetime.now(timezone.utc)
+        item.updated_at = datetime.now(UTC)
         db.add(item)
         await db.commit()
         await db.refresh(item)
         return item
 
     async def copy_file(
-        self, db: AsyncSession, media_id: uuid.UUID, dest_parent_id: Optional[uuid.UUID] = None
+        self,
+        db: AsyncSession,
+        media_id: uuid.UUID,
+        dest_parent_id: uuid.UUID | None = None,
     ) -> MediaItem:
         """
         Copies a file: Duplicates the MinIO object and inserts a new DB record.
-        If copying a folder, it will recursively duplicate all files and nested structure.
+        If copying a folder, recursively duplicates all files and nested structure.
         """
         item = await self._get_item_or_raise(db, media_id)
 
@@ -517,13 +623,14 @@ class MediaService:
 
         if not item.is_folder:
             # 1. Copy S3 objects
+            src_bucket = item.bucket or settings.MINIO_BUCKET
             new_object_key = f"files/{uuid.uuid4().hex}"
             try:
                 await run_sync(
                     lambda: self.s3_client.copy_object(
                         Bucket=settings.MINIO_BUCKET,
                         Key=new_object_key,
-                        CopySource={"Bucket": item.bucket or settings.MINIO_BUCKET, "Key": item.object_key},
+                        CopySource={"Bucket": src_bucket, "Key": item.object_key},
                     )
                 )
             except Exception as e:
@@ -531,7 +638,7 @@ class MediaService:
                 raise BadRequestException(
                     message="Không thể sao chép tệp tin trên hệ thống lưu trữ",
                     error_code="STORAGE_COPY_ERROR",
-                )
+                ) from e
 
             new_thumbnail_key = None
             if item.thumbnail_key:
@@ -541,15 +648,23 @@ class MediaService:
                         lambda: self.s3_client.copy_object(
                             Bucket=settings.MINIO_BUCKET,
                             Key=new_thumbnail_key,
-                            CopySource={"Bucket": item.bucket or settings.MINIO_BUCKET, "Key": item.thumbnail_key},
+                            CopySource={
+                                "Bucket": src_bucket,
+                                "Key": item.thumbnail_key,
+                            },
                         )
                     )
                 except Exception as e:
                     logger.warning(f"Lỗi sao chép ảnh thumbnail trong MinIO: {e}")
 
             # 2. Save DB copy
+            copied_name = (
+                sanitize_media_filename(f"Copy of {item.name}")
+                if dest_parent_id == item.parent_id
+                else sanitize_media_filename(item.name)
+            )
             copied_item = MediaItem(
-                name=f"Copy of {item.name}" if dest_parent_id == item.parent_id else item.name,
+                name=copied_name,
                 is_folder=False,
                 parent_id=dest_parent_id,
                 object_key=new_object_key,
@@ -571,14 +686,22 @@ class MediaService:
             return await self._recursive_copy_folder(db, item, dest_parent_id)
 
     async def _recursive_copy_folder(
-        self, db: AsyncSession, source_folder: MediaItem, dest_parent_id: Optional[uuid.UUID]
+        self,
+        db: AsyncSession,
+        source_folder: MediaItem,
+        dest_parent_id: uuid.UUID | None,
     ) -> MediaItem:
         """
         Recursively copies a folder structure.
         """
         # Create destination folder
+        copied_folder_name = (
+            sanitize_media_filename(f"Copy of {source_folder.name}")
+            if dest_parent_id == source_folder.parent_id
+            else sanitize_media_filename(source_folder.name)
+        )
         new_folder = MediaItem(
-            name=f"Copy of {source_folder.name}" if dest_parent_id == source_folder.parent_id else source_folder.name,
+            name=copied_folder_name,
             is_folder=True,
             parent_id=dest_parent_id,
         )
@@ -595,23 +718,32 @@ class MediaService:
                 await self._recursive_copy_folder(db, child, new_folder.id)
             else:
                 # Copy file S3 objects
+                child_bucket = child.bucket or settings.MINIO_BUCKET
+                child_obj_key = child.object_key
                 new_object_key = f"files/{uuid.uuid4().hex}"
                 await run_sync(
-                    lambda: self.s3_client.copy_object(
-                        Bucket=settings.MINIO_BUCKET,
-                        Key=new_object_key,
-                        CopySource={"Bucket": child.bucket or settings.MINIO_BUCKET, "Key": child.object_key},
+                    lambda nk=new_object_key, cb=child_bucket, ck=child_obj_key: (
+                        self.s3_client.copy_object(
+                            Bucket=settings.MINIO_BUCKET,
+                            Key=nk,
+                            CopySource={"Bucket": cb, "Key": ck},
+                        )
                     )
                 )
-                
+
                 new_thumbnail_key = None
                 if child.thumbnail_key:
+                    child_thumb_key = child.thumbnail_key
                     new_thumbnail_key = f"thumbs/{uuid.uuid4().hex}"
                     await run_sync(
-                        lambda: self.s3_client.copy_object(
-                            Bucket=settings.MINIO_BUCKET,
-                            Key=new_thumbnail_key,
-                            CopySource={"Bucket": child.bucket or settings.MINIO_BUCKET, "Key": child.thumbnail_key},
+                        lambda nk=new_thumbnail_key,
+                        cb=child_bucket,
+                        ck=child_thumb_key: (
+                            self.s3_client.copy_object(
+                                Bucket=settings.MINIO_BUCKET,
+                                Key=nk,
+                                CopySource={"Bucket": cb, "Key": ck},
+                            )
                         )
                     )
 
@@ -646,17 +778,21 @@ class MediaService:
                 message="Thư mục không có đường dẫn URL file trực tiếp",
                 error_code="DIRECTORY_URL_ERROR",
             )
-        
+
         return f"/api/v1/portal/media/file/{item.object_key}"
 
     async def generate_presigned_upload_url(
         self, filename: str, content_type: str, expires_in: int = 3600
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Generates S3 Presigned POST URL for direct client S3 file uploads.
         """
         content_type = normalize_content_type(content_type)
-        if not content_type or is_active_content_type(content_type) or content_type == "image/svg+xml":
+        if (
+            not content_type
+            or is_active_content_type(content_type)
+            or content_type == "image/svg+xml"
+        ):
             # SVG cần được quét nội dung nên phải đi qua endpoint /upload
             raise BadRequestException(
                 message="Định dạng tập tin này không được phép tải lên trực tiếp.",
@@ -664,7 +800,7 @@ class MediaService:
             )
         expires_in = max(60, min(int(expires_in), 3600))
         object_key = f"files/{uuid.uuid4().hex}"
-        
+
         response = await run_sync(
             lambda: self.s3_client.generate_presigned_post(
                 Bucket=settings.MINIO_BUCKET,
@@ -676,7 +812,7 @@ class MediaService:
                     # Cùng giới hạn dung lượng với upload qua API
                     ["content-length-range", 1, settings.MAX_CONTENT_LENGTH],
                 ],
-                ExpiresIn=expires_in
+                ExpiresIn=expires_in,
             )
         )
         return {
@@ -699,18 +835,21 @@ class MediaService:
             )
 
         expires_in = max(60, min(int(expires_in), 3600))
+        bucket = item.bucket or settings.MINIO_BUCKET
         url = await run_sync(
             lambda: self.s3_client.generate_presigned_url(
                 ClientMethod="get_object",
-                Params={"Bucket": item.bucket or settings.MINIO_BUCKET, "Key": item.object_key},
-                ExpiresIn=expires_in
+                Params={"Bucket": bucket, "Key": item.object_key},
+                ExpiresIn=expires_in,
             )
         )
         return url
 
     # ─── Internal Helpers ─────────────────────────────────────────────────────
 
-    async def _get_item_or_raise(self, db: AsyncSession, media_id: uuid.UUID) -> MediaItem:
+    async def _get_item_or_raise(
+        self, db: AsyncSession, media_id: uuid.UUID
+    ) -> MediaItem:
         stmt = select(MediaItem).where(MediaItem.id == media_id)
         result = await db.execute(stmt)
         item = result.scalar_one_or_none()
@@ -721,7 +860,9 @@ class MediaService:
             )
         return item
 
-    async def _verify_parent_exists_and_is_folder(self, db: AsyncSession, parent_id: uuid.UUID) -> None:
+    async def _verify_parent_exists_and_is_folder(
+        self, db: AsyncSession, parent_id: uuid.UUID
+    ) -> None:
         parent = await self._get_item_or_raise(db, parent_id)
         if not parent.is_folder:
             raise BadRequestException(
@@ -730,7 +871,7 @@ class MediaService:
             )
 
     async def _collect_descendant_files(
-        self, db: AsyncSession, folder_id: uuid.UUID, accumulator: List[MediaItem]
+        self, db: AsyncSession, folder_id: uuid.UUID, accumulator: list[MediaItem]
     ) -> None:
         """
         Recursively collects all child file items inside a folder.
@@ -751,10 +892,14 @@ class MediaService:
         Verifies if 'folder_id' is located inside 'ancestor_id' hierarchy.
         Prevents circular references.
         """
-        current_id: Optional[uuid.UUID] = folder_id
+        current_id: uuid.UUID | None = folder_id
+        visited: set[uuid.UUID] = set()
         while current_id is not None:
             if current_id == ancestor_id:
                 return True
+            if current_id in visited:
+                return False
+            visited.add(current_id)
             stmt = select(MediaItem.parent_id).where(MediaItem.id == current_id)
             result = await db.execute(stmt)
             current_id = result.scalar_one_or_none()

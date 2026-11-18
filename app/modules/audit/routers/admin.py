@@ -1,8 +1,7 @@
 import uuid
 from datetime import datetime
-from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -17,13 +16,13 @@ admin_router = APIRouter()
 
 @admin_router.get("", response_model=AuditLogListResponse)
 async def list_audit_logs(
-    page: int = 1,
-    page_size: int = 20,
-    action: Optional[str] = None,
-    target_type: Optional[str] = None,
-    actor_id: Optional[uuid.UUID] = None,
-    from_date: Optional[datetime] = None,
-    to_date: Optional[datetime] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    action: str | None = None,
+    target_type: str | None = None,
+    actor_id: uuid.UUID | None = None,
+    from_date: datetime | None = None,
+    to_date: datetime | None = None,
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> AuditLogListResponse:

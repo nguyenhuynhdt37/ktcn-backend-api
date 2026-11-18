@@ -1,21 +1,19 @@
-import asyncio
-import time
 import json
-from loguru import logger
+
 import redis.asyncio as aioredis
-from typing import Optional
+from loguru import logger
 
 from app.core.config import settings
-from app.shared.redis import redis_pool
+from app.modules.translation.schemas.common import TranslationContext
 from app.modules.translation.utils import (
     get_cache_key,
-    validate_translation_input,
-    should_skip_translation,
+    postprocess_text,
     preprocess_text,
-    postprocess_text
+    should_skip_translation,
+    validate_translation_input,
 )
 from app.shared.ai.service import AIService
-from app.modules.translation.schemas.common import TranslationContext
+from app.shared.redis import redis_pool
 
 # Mapping mã ngôn ngữ sang tên ngôn ngữ rõ ràng cho LLM
 LANG_MAP = {
@@ -116,7 +114,7 @@ class TranslationService:
     """
     def __init__(self):
         self.ai_service = AIService()
-        
+
         # Giữ lại các thuộc tính này để đảm bảo tương thích ngược với Unit Tests hiện tại
         self._is_ready = True
         self._model = "OmniRoute"
@@ -138,10 +136,11 @@ class TranslationService:
         logger.info("✅ Warmup dịch thuật bỏ qua (sử dụng OmniRoute Gateway).")
         self._is_ready = True
 
-    async def _get_cache(self, text: str, tgt_lang: str, context: Optional[TranslationContext] = None) -> str | None:
+    async def _get_cache(self, text: str, tgt_lang: str, context: TranslationContext | None = None) -> str | None:
         """Lấy bản dịch từ Redis cache."""
         if not redis_pool:
             return None
+        client = None
         try:
             client = aioredis.Redis(connection_pool=redis_pool)
             key = get_cache_key(text, tgt_lang)
@@ -154,12 +153,16 @@ class TranslationService:
             logger.info(f"❄️ Cache Miss | Ngôn ngữ: {tgt_lang} | Ngữ cảnh: {context.value if context else 'None'} | Số ký tự: {len(text)}")
         except Exception as e:
             logger.warning(f"Lỗi khi đọc Redis cache: {str(e)}")
+        finally:
+            if client is not None:
+                await client.aclose()
         return None
 
-    async def _set_cache(self, text: str, tgt_lang: str, translated: str, context: Optional[TranslationContext] = None) -> None:
+    async def _set_cache(self, text: str, tgt_lang: str, translated: str, context: TranslationContext | None = None) -> None:
         """Lưu bản dịch vào Redis cache."""
         if not redis_pool:
             return
+        client = None
         try:
             client = aioredis.Redis(connection_pool=redis_pool)
             key = get_cache_key(text, tgt_lang)
@@ -168,21 +171,24 @@ class TranslationService:
             await client.setex(key, settings.TRANSLATION_CACHE_TTL, translated)
         except Exception as e:
             logger.warning(f"Lỗi khi lưu Redis cache: {str(e)}")
+        finally:
+            if client is not None:
+                await client.aclose()
 
     async def translate_text(
-        self, 
-        text: str, 
+        self,
+        text: str,
         target_languages: list[str],
-        context: Optional[TranslationContext] = None
+        context: TranslationContext | None = None
     ) -> dict[str, str]:
         """
         API chính dịch một đoạn văn bản tiếng Việt sang danh sách ngôn ngữ đích.
         Có hỗ trợ Redis cache và prompt định hướng theo ngữ cảnh (context).
         """
         validate_translation_input(text)
-        
+
         response = {"vi": text}
-        
+
         # 0. Kiểm tra xem có nên bỏ qua dịch (ví dụ: URL, Email, Số điện thoại)
         if should_skip_translation(text):
             for lang in target_languages:
@@ -191,27 +197,30 @@ class TranslationService:
 
         # Tiền xử lý (khử ALL CAPS)
         processed_text, is_all_caps = preprocess_text(text)
-        
+
         for lang in target_languages:
+            if lang == "vi":
+                continue
             # 1. Kiểm tra cache với text đã tiền xử lý
             cached = await self._get_cache(processed_text, lang, context)
             if cached is not None:
                 response[lang] = postprocess_text(cached, is_all_caps)
                 continue
-                
+
             # 2. Gọi AIService dịch qua OmniRoute
             tgt_lang_name = LANG_MAP.get(lang, lang)
             system_instruction = (
                 "Bạn là một dịch giả chuyên nghiệp. Hãy dịch văn bản từ tiếng Việt sang ngôn ngữ đích được yêu cầu. "
                 "Chỉ trả về kết quả dịch trực tiếp, không giải thích, không thêm bất kỳ ký tự hay lời chào nào khác."
             )
-            
+
             # Bổ sung ngữ cảnh định hướng dịch nếu có
             if context and context in CONTEXT_PROMPTS:
                 system_instruction += f"\nNgữ cảnh dịch: {CONTEXT_PROMPTS[context]}"
-                
+
             prompt = f"Dịch văn bản sau sang {tgt_lang_name}:\n{processed_text}"
-            
+
+            cache_hit_success = False
             try:
                 translated = await self.ai_service.generate_text(
                     prompt=prompt,
@@ -219,22 +228,24 @@ class TranslationService:
                     temperature=0.0,
                 )
                 translated = translated.strip()
+                cache_hit_success = True
             except Exception as e:
                 logger.error(f"Lỗi khi dịch text qua AIService ({lang}): {e}")
-                # Fallback: Trả về bản gốc nếu AI lỗi
+                # Fallback: Trả về bản gốc nếu AI lỗi (không cache fallback)
                 translated = processed_text
-            
-            # 3. Lưu cache với text đã tiền xử lý
-            await self._set_cache(processed_text, lang, translated, context)
+
+            # 3. Chỉ lưu cache khi AI dịch thành công
+            if cache_hit_success:
+                await self._set_cache(processed_text, lang, translated, context)
             response[lang] = postprocess_text(translated, is_all_caps)
-            
+
         return response
 
     async def translate_batch(
-        self, 
-        texts: list[str], 
+        self,
+        texts: list[str],
         target_languages: list[str],
-        context: Optional[TranslationContext] = None
+        context: TranslationContext | None = None
     ) -> list[dict[str, str]]:
         """
         API dịch một danh sách đoạn văn bản sang danh sách ngôn ngữ đích (Tối ưu hóa batch).
@@ -242,26 +253,28 @@ class TranslationService:
         """
         for text in texts:
             validate_translation_input(text)
-            
+
         # Khởi tạo kết quả
         results = [{"vi": text} for text in texts]
 
         for lang in target_languages:
+            if lang == "vi":
+                continue
             # Tìm xem text nào chưa có trong cache để dịch theo batch
             pending_texts = []
             pending_indices = []
             preprocess_info = {}
-            
+
             for idx, text in enumerate(texts):
                 # 0. Bỏ qua dịch nếu là URL/Email/Số
                 if should_skip_translation(text):
                     results[idx][lang] = text
                     continue
-                
+
                 # Tiền xử lý
                 processed_text, is_all_caps = preprocess_text(text)
                 preprocess_info[idx] = (processed_text, is_all_caps)
-                
+
                 # 1. Kiểm tra cache
                 cached = await self._get_cache(processed_text, lang, context)
                 if cached is not None:
@@ -269,7 +282,7 @@ class TranslationService:
                 else:
                     pending_texts.append(processed_text)
                     pending_indices.append(idx)
-            
+
             # Nếu có chuỗi cần dịch bằng model
             if pending_texts:
                 tgt_lang_name = LANG_MAP.get(lang, lang)
@@ -278,13 +291,14 @@ class TranslationService:
                     "Hãy dịch chúng sang ngôn ngữ đích và trả về kết quả dưới dạng một JSON array tương ứng có cùng số lượng phần tử và đúng thứ tự. "
                     "Chỉ trả về chuỗi JSON array hợp lệ, không giải thích, không bọc trong ```json."
                 )
-                
+
                 # Bổ sung ngữ cảnh định hướng dịch nếu có
                 if context and context in CONTEXT_PROMPTS:
                     system_instruction += f"\nNgữ cảnh dịch cho tất cả các phần tử: {CONTEXT_PROMPTS[context]}"
-                    
+
                 prompt = f"Dịch danh sách các văn bản sau sang {tgt_lang_name}:\n{json.dumps(pending_texts, ensure_ascii=False)}"
-                
+
+                cache_flags: list[bool] = []
                 try:
                     translated_resp = await self.ai_service.generate_text(
                         prompt=prompt,
@@ -292,7 +306,7 @@ class TranslationService:
                         temperature=0.0,
                     )
                     translated_resp = translated_resp.strip()
-                    
+
                     # Loại bỏ phần bọc ```json và ``` nếu AI vẫn thêm vào
                     if translated_resp.startswith("```"):
                         lines = translated_resp.splitlines()
@@ -301,14 +315,22 @@ class TranslationService:
                         if lines and lines[-1].startswith("```"):
                             lines = lines[:-1]
                         translated_resp = "\n".join(lines).strip()
-                    
+
                     translated_list = json.loads(translated_resp)
-                    if not isinstance(translated_list, list) or len(translated_list) != len(pending_texts):
-                        raise ValueError("Số lượng phần tử dịch trả về không khớp.")
+                    if (
+                        not isinstance(translated_list, list)
+                        or len(translated_list) != len(pending_texts)
+                        or not all(isinstance(item, str) for item in translated_list)
+                    ):
+                        raise ValueError(
+                            "Dữ liệu dịch trả về không hợp lệ hoặc không khớp số lượng."
+                        )
+                    cache_flags = [True] * len(pending_texts)
                 except Exception as e:
                     logger.warning(f"Lỗi khi dịch batch qua AIService ({lang}), tiến hành fallback dịch tuần tự: {e}")
                     # Fallback: dịch từng câu đơn lẻ
                     translated_list = []
+                    cache_flags = []
                     for p_text in pending_texts:
                         single_prompt = f"Dịch văn bản sau sang {tgt_lang_name}:\n{p_text}"
                         single_instruction = (
@@ -324,25 +346,28 @@ class TranslationService:
                                 temperature=0.0,
                             )
                             translated_list.append(t_single.strip())
+                            cache_flags.append(True)
                         except Exception as ex:
                             logger.error(f"Fallback dịch đơn lẻ thất bại: {ex}")
                             translated_list.append(p_text)
-                
+                            cache_flags.append(False)
+
                 # Lưu cache và map kết quả
                 for idx_in_pending, translated in enumerate(translated_list):
                     original_idx = pending_indices[idx_in_pending]
                     processed_text, is_all_caps = preprocess_info[original_idx]
-                    
-                    await self._set_cache(processed_text, lang, translated, context)
+
+                    if cache_flags[idx_in_pending]:
+                        await self._set_cache(processed_text, lang, translated, context)
                     results[original_idx][lang] = postprocess_text(translated, is_all_caps)
 
         return results
 
     async def translate_html(
-        self, 
-        html_content: str, 
+        self,
+        html_content: str,
         target_languages: list[str],
-        context: Optional[TranslationContext] = None
+        context: TranslationContext | None = None
     ) -> dict[str, str]:
         """
         API chuyên dụng dịch nội dung HTML (cho CKEditor), giữ nguyên cấu trúc DOM và định dạng.
@@ -356,6 +381,8 @@ class TranslationService:
         response = {"vi": html_content}
 
         for lang in target_languages:
+            if lang == "vi":
+                continue
             # 1. Kiểm tra cache cho toàn bộ chuỗi HTML
             cached = await self._get_cache(html_content, lang, context)
             if cached is not None:
@@ -368,13 +395,14 @@ class TranslationService:
                 "BẮT BUỘC giữ nguyên hoàn toàn cấu trúc HTML, tất cả các thẻ (như <p>, <a>, <span>, <img>, <table>, <tr>, <td> v.v.) và các thuộc tính của chúng (class, href, src, target, alt). "
                 "Chỉ dịch phần văn bản hiển thị. Chỉ trả về chuỗi HTML đã dịch, không giải thích, không bọc trong ```html hoặc ```."
             )
-            
+
             # Bổ sung ngữ cảnh định hướng dịch HTML nếu có
             if context and context in CONTEXT_PROMPTS:
                 system_instruction += f"\nNgữ cảnh dịch HTML: {CONTEXT_PROMPTS[context]}"
-                
+
             prompt = f"Dịch chuỗi HTML sau sang {tgt_lang_name}:\n{html_content}"
 
+            cache_hit_success = False
             try:
                 translated = await self.ai_service.generate_text(
                     prompt=prompt,
@@ -391,14 +419,16 @@ class TranslationService:
                     if lines and lines[-1].startswith("```"):
                         lines = lines[:-1]
                     translated = "\n".join(lines).strip()
+                cache_hit_success = True
 
             except Exception as e:
                 logger.error(f"Lỗi khi dịch HTML qua AIService ({lang}): {e}")
-                # Fallback: Giữ nguyên HTML gốc nếu lỗi
+                # Fallback: Giữ nguyên HTML gốc nếu lỗi (không cache fallback)
                 translated = html_content
 
-            # 2. Lưu cache cho toàn bộ chuỗi HTML
-            await self._set_cache(html_content, lang, translated, context)
+            # 2. Chỉ lưu cache khi AI dịch thành công
+            if cache_hit_success:
+                await self._set_cache(html_content, lang, translated, context)
             response[lang] = translated
 
         return response

@@ -1,9 +1,10 @@
 import asyncio
-import uuid
-import re
 import math
-from datetime import datetime, timezone
-from typing import Any, Optional, Tuple
+import re
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
 
 def slugify(text: str) -> str:
     """
@@ -27,22 +28,33 @@ def slugify(text: str) -> str:
     return text.strip('-')
 
 from loguru import logger
-from sqlalchemy import select, func, desc, or_
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload, selectinload, load_only
+from sqlalchemy.orm import joinedload, selectinload
 
-from app.core.exceptions import BadRequestException, NotFoundException, ForbiddenException
+from app.core.exceptions import (
+    BadRequestException,
+    ForbiddenException,
+    NotFoundException,
+)
 from app.modules.article.models import Article, ArticleStatus, ArticleTranslation
+from app.modules.article.repositories.query_builder import (
+    ArticleFilterParams,
+    ArticleQueryBuilder,
+    SortStrategy,
+)
 from app.modules.article.schemas import (
-    BulkActionEnum, BulkActionResponse, ArticleStatsResponse, 
-    ArticleAttributesUpdateRequest, ArticleCreateRequest, SlugCheckResponse, 
-    ArticleDraftsCountResponse, ArticleUpdateRequest
+    ArticleAttributesUpdateRequest,
+    ArticleCreateRequest,
+    ArticleStatsResponse,
+    ArticleUpdateRequest,
+    BulkActionEnum,
+    BulkActionResponse,
+    SlugCheckResponse,
 )
 from app.modules.auth.models import User
 from app.modules.category.models import Category
 from app.modules.tag.models import Tag
-from app.modules.article.repositories.query_builder import ArticleQueryBuilder, ArticleFilterParams, SortStrategy
-
 
 # Giữ tham chiếu để task nền không bị garbage-collect trước khi chạy xong
 _background_tasks: set[asyncio.Task] = set()
@@ -72,21 +84,21 @@ class ArticleService:
         """
         if not article:
             return article
-        
+
         # 1. Tìm bản dịch của ngôn ngữ đích
         target_translation = None
         for t in getattr(article, "translations", []):
             if t.language and t.language.code == lang:
                 target_translation = t
                 break
-                
+
         # 2. Nếu không tìm thấy hoặc title rỗng, fallback về tiếng Việt ("vi")
         if (not target_translation or not target_translation.title) and lang != "vi":
             for t in getattr(article, "translations", []):
                 if t.language and t.language.code == "vi":
                     target_translation = t
                     break
-                    
+
         # 3. Gán thuộc tính hoặc fallback về mặc định
         if target_translation:
             article.title = target_translation.title
@@ -112,19 +124,19 @@ class ArticleService:
             article.og_title = None
             article.og_description = None
             article.og_image = None
-            
+
         return article
 
     async def _resolve_unique_slug(
-        self, db: AsyncSession, base_text: str, language_id: uuid.UUID, exclude_article_id: Optional[uuid.UUID] = None
+        self, db: AsyncSession, base_text: str, language_id: uuid.UUID, exclude_article_id: uuid.UUID | None = None
     ) -> str:
         """Tính toán slug không trùng lặp trong bảng ArticleTranslation theo từng ngôn ngữ."""
         base_slug = slugify(base_text)
         if not base_slug:
             base_slug = "bai-viet"
-            
+
         slug_candidate = base_slug
-        
+
         from app.modules.article.models import ArticleTranslation
         query = select(ArticleTranslation.slug).where(
             ArticleTranslation.language_id == language_id,
@@ -132,16 +144,16 @@ class ArticleService:
         )
         if exclude_article_id:
             query = query.where(ArticleTranslation.article_id != exclude_article_id)
-            
+
         res = await db.execute(query)
         exists = res.scalar_one_or_none()
-        
+
         if exists:
             # Sinh slug mới bằng cách thêm uuid rút gọn 8 ký tự
             import uuid as py_uuid
             suffix = str(py_uuid.uuid4())[:8]
             slug_candidate = f"{base_slug}-{suffix}"
-            
+
         return slug_candidate
 
     @staticmethod
@@ -168,7 +180,7 @@ class ArticleService:
         # Gửi Web Push Notification cho Portal khách (V1)
         try:
             from app.modules.notification.service import notification_service
-            
+
             title_vi = ""
             excerpt_vi = ""
             for t in getattr(article, "translations", []):
@@ -176,7 +188,7 @@ class ArticleService:
                     title_vi = t.title
                     excerpt_vi = t.excerpt or ""
                     break
-            
+
             if not title_vi:
                 for t in getattr(article, "translations", []):
                     title_vi = t.title
@@ -212,24 +224,24 @@ class ArticleService:
         *,
         page: int = 1,
         page_size: int = 10,
-        search: Optional[str] = None,
-        category_id: Optional[uuid.UUID] = None,
-        category_slugs: Optional[list[str]] = None,
-        exclude_category_slugs: Optional[list[str]] = None,
-        author_id: Optional[uuid.UUID] = None,
-        tag_ids: Optional[list[uuid.UUID]] = None,
-        status: Optional[ArticleStatus] = None,
-        is_pinned: Optional[bool] = None,
-        is_draft: Optional[bool] = False,
-        created_from: Optional[datetime] = None,
-        created_to: Optional[datetime] = None,
-        published_from: Optional[datetime] = None,
-        published_to: Optional[datetime] = None,
+        search: str | None = None,
+        category_id: uuid.UUID | None = None,
+        category_slugs: list[str] | None = None,
+        exclude_category_slugs: list[str] | None = None,
+        author_id: uuid.UUID | None = None,
+        tag_ids: list[uuid.UUID] | None = None,
+        status: ArticleStatus | None = None,
+        is_pinned: bool | None = None,
+        is_draft: bool | None = False,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        published_from: datetime | None = None,
+        published_to: datetime | None = None,
         deleted: bool = False,
         sort_by: str = "created_at",
         sort_dir: str = "desc",
         lang: str = "vi",
-    ) -> Tuple[list[Article], int]:
+    ) -> tuple[list[Article], int]:
         """
         Query danh sách bài viết từ database với phân trang, lọc và sắp xếp động tối ưu (Admin CMS).
         """
@@ -245,11 +257,11 @@ class ArticleService:
 
         if lang_id:
             builder.resolve_translation(lang_id)
-        
+
         # Áp dụng Admin scope và eager load quan hệ
         builder.admin_scope(deleted=deleted)
         builder.with_portal_relations()
-        
+
         # Đóng gói filter params
         filter_params = ArticleFilterParams(
             category_id=category_id,
@@ -263,26 +275,26 @@ class ArticleService:
             status=status
         )
         builder.filter(filter_params)
-        
+
         # Bổ sung các bộ lọc đặc thù chỉ Admin mới có
         if is_draft is not None:
             builder.query = builder.query.where(Article.is_draft == is_draft)
-            
+
         if created_from:
             builder.query = builder.query.where(Article.created_at >= created_from)
         if created_to:
             builder.query = builder.query.where(Article.created_at <= created_to)
-            
+
         # Tìm kiếm Generic
         if search:
             builder.search(
                 fields=[ArticleTranslation.title, ArticleTranslation.slug],
                 keyword=search
             )
-            
+
         # Đếm tổng
         total = await builder.get_total_count()
-        
+
         # Sắp xếp và phân trang
         builder.sort(
             strategy=SortStrategy.CUSTOM,
@@ -290,7 +302,7 @@ class ArticleService:
             sort_dir=sort_dir
         )
         builder.paginate(page=page, page_size=page_size)
-        
+
         # Thực thi
         items = await builder.execute()
         for item in items:
@@ -315,9 +327,9 @@ class ArticleService:
         Không cho phép thực hiện đối với các trạng thái khác (như DRAFT, SCHEDULED).
         """
         # Query bài viết kèm các quan hệ cần hiển thị ở response
+        from app.modules.article.models import ArticleTranslation
         from app.modules.category.models import CategoryTranslation
         from app.modules.tag.models import TagTranslation
-        from app.modules.article.models import ArticleTranslation
 
         stmt = (
             select(Article)
@@ -336,7 +348,7 @@ class ArticleService:
         )
         result = await db.execute(stmt)
         article = result.scalars().first()
-        
+
         if not article:
             raise NotFoundException(message="Không tìm thấy bài viết hoặc bài viết đã bị xóa.")
 
@@ -354,7 +366,7 @@ class ArticleService:
 
         # Cập nhật trạng thái
         article.status = ArticleStatus.ARCHIVED
-        article.last_edited_at = datetime.now(timezone.utc)
+        article.last_edited_at = datetime.now(UTC)
         db.add(article)
 
         # Ghi nhận audit log
@@ -388,9 +400,9 @@ class ArticleService:
         Không cho phép thực hiện đối với các trạng thái khác (như DRAFT, SCHEDULED).
         """
         # Query bài viết kèm các quan hệ cần hiển thị ở response
+        from app.modules.article.models import ArticleTranslation
         from app.modules.category.models import CategoryTranslation
         from app.modules.tag.models import TagTranslation
-        from app.modules.article.models import ArticleTranslation
 
         stmt = (
             select(Article)
@@ -409,7 +421,7 @@ class ArticleService:
         )
         result = await db.execute(stmt)
         article = result.scalars().first()
-        
+
         if not article:
             raise NotFoundException(message="Không tìm thấy bài viết hoặc bài viết đã bị xóa.")
 
@@ -427,8 +439,8 @@ class ArticleService:
 
         # Cập nhật trạng thái
         article.status = ArticleStatus.PUBLISHED
-        article.published_at = article.published_at or datetime.now(timezone.utc)
-        article.last_edited_at = datetime.now(timezone.utc)
+        article.published_at = article.published_at or datetime.now(UTC)
+        article.last_edited_at = datetime.now(UTC)
         db.add(article)
 
         # Ghi nhận audit log
@@ -468,92 +480,132 @@ class ArticleService:
             stmt = select(Article).where(Article.id.in_(article_ids))
         else:
             stmt = select(Article).where(Article.id.in_(article_ids), Article.deleted_at == None)
-        
+        stmt = stmt.options(
+            selectinload(Article.translations).selectinload(ArticleTranslation.language)
+        )
+
         result = await db.execute(stmt)
         articles = {art.id: art for art in result.scalars().all()}
-        
+
+        def _get_article_title(art: Article) -> str:
+            translations = getattr(art, "translations", None) or []
+            for t in translations:
+                if getattr(t, "language", None) and t.language.code == "vi" and t.title:
+                    return t.title
+            for t in translations:
+                if getattr(t, "title", None):
+                    return t.title
+            return getattr(art, "title", None) or "Chưa dịch"
+
         success_count = 0
         failed_count = 0
         failed_ids = []
-        
+
         from app.modules.audit.service import log_action
-        
+
         for art_id in article_ids:
             article = articles.get(art_id)
             if not article:
                 failed_count += 1
                 failed_ids.append(art_id)
                 continue
-            
+
             # Phân quyền: Chỉ chủ sở hữu bài viết hoặc admin mới được thực hiện bulk action lên bài viết đó
             is_user_admin = getattr(current_user, "is_admin", False) or "admin" in getattr(current_user, "roles", []) or "super_admin" in getattr(current_user, "roles", [])
             if article.author_id != current_user.id and not is_user_admin:
                 failed_count += 1
                 failed_ids.append(art_id)
                 continue
-            
+
+            article_title = _get_article_title(article)
+            prev_status = article.status
+            prev_published_at = article.published_at
+            prev_last_edited_at = article.last_edited_at
+            prev_deleted_at = article.deleted_at
+
             try:
                 if action == BulkActionEnum.ARCHIVE:
                     # Chỉ được archive bài viết đang PUBLISHED
                     if article.status != ArticleStatus.PUBLISHED:
                         raise ValueError("Chỉ bài viết PUBLISHED mới có thể archive")
-                    
+
                     previous_status = article.status.value
                     article.status = ArticleStatus.ARCHIVED
-                    article.last_edited_at = datetime.now(timezone.utc)
+                    article.last_edited_at = datetime.now(UTC)
                     db.add(article)
-                    
+
                     await log_action(
-                        db, current_user, "ARTICLE_ARCHIVED", "article", article.id,
-                        {"title": article.title, "previous_status": previous_status, "bulk": True}
+                        db,
+                        current_user,
+                        "ARTICLE_ARCHIVED",
+                        "article",
+                        article.id,
+                        {
+                            "title": article_title,
+                            "previous_status": previous_status,
+                            "bulk": True,
+                        },
                     )
-                    
+
                 elif action == BulkActionEnum.PUBLISH:
                     # Chỉ được publish bài viết đang ARCHIVED
                     if article.status != ArticleStatus.ARCHIVED:
                         raise ValueError("Chỉ bài viết ARCHIVED mới có thể publish")
-                    
+
                     previous_status = article.status.value
                     article.status = ArticleStatus.PUBLISHED
-                    article.published_at = article.published_at or datetime.now(timezone.utc)
-                    article.last_edited_at = datetime.now(timezone.utc)
+                    article.published_at = article.published_at or datetime.now(UTC)
+                    article.last_edited_at = datetime.now(UTC)
                     db.add(article)
-                    
+
                     await log_action(
-                        db, current_user, "ARTICLE_PUBLISHED", "article", article.id,
-                        {"title": article.title, "previous_status": previous_status, "bulk": True}
+                        db,
+                        current_user,
+                        "ARTICLE_PUBLISHED",
+                        "article",
+                        article.id,
+                        {
+                            "title": article_title,
+                            "previous_status": previous_status,
+                            "bulk": True,
+                        },
                     )
-                    
+
                 elif action == BulkActionEnum.DELETE:
                     # Xóa mềm bài viết
-                    article.deleted_at = datetime.now(timezone.utc)
+                    article.deleted_at = datetime.now(UTC)
                     db.add(article)
-                    
+
                     await log_action(
                         db, current_user, "ARTICLE_DELETED", "article", article.id,
-                        {"title": article.title, "bulk": True}
+                        {"title": article_title, "bulk": True}
                     )
-                    
+
                 elif action == BulkActionEnum.RESTORE:
                     # Khôi phục bài viết đã xóa mềm
                     if article.deleted_at is None:
                         raise ValueError("Bài viết chưa bị xóa")
-                    
+
                     article.deleted_at = None
                     db.add(article)
-                    
+
                     await log_action(
                         db, current_user, "ARTICLE_RESTORED", "article", article.id,
-                        {"title": article.title, "bulk": True}
+                        {"title": article_title, "bulk": True}
                     )
-                
+
                 success_count += 1
             except Exception:
+                # Khôi phục trạng thái object nếu thao tác / audit log lỗi
+                article.status = prev_status
+                article.published_at = prev_published_at
+                article.last_edited_at = prev_last_edited_at
+                article.deleted_at = prev_deleted_at
                 failed_count += 1
                 failed_ids.append(art_id)
-                
+
         await db.commit()
-        
+
         action_verbs = {
             BulkActionEnum.ARCHIVE: "lưu trữ",
             BulkActionEnum.PUBLISH: "công khai",
@@ -562,7 +614,7 @@ class ArticleService:
         }
         verb = action_verbs.get(action, "cập nhật")
         message = f"Đã thực hiện {verb} hàng loạt bài viết. Thành công: {success_count}, Thất bại: {failed_count}."
-        
+
         return BulkActionResponse(
             success_count=success_count,
             failed_count=failed_count,
@@ -582,23 +634,23 @@ class ArticleService:
         )
         res_statuses = await db.execute(stmt_statuses)
         status_counts = {status: count for status, count in res_statuses.all()}
-        
+
         # 2. Đếm số lượng trong thùng rác (đã xóa mềm)
         stmt_trash = select(func.count(Article.id)).where(Article.deleted_at != None)
         res_trash = await db.execute(stmt_trash)
         trash_count = res_trash.scalar() or 0
-        
+
         # 3. Tính tổng lượt xem của các bài viết được xuất bản trong tháng hiện tại
-        now = datetime.now(timezone.utc)
-        start_of_month = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-        
+        now = datetime.now(UTC)
+        start_of_month = datetime(now.year, now.month, 1, tzinfo=UTC)
+
         stmt_views = (
             select(func.sum(Article.view_count))
             .where(Article.deleted_at == None, Article.published_at >= start_of_month)
         )
         res_views = await db.execute(stmt_views)
         total_views = res_views.scalar() or 0
-        
+
         return ArticleStatsResponse(
             published_count=status_counts.get(ArticleStatus.PUBLISHED, 0),
             scheduled_count=status_counts.get(ArticleStatus.SCHEDULED, 0),
@@ -619,9 +671,9 @@ class ArticleService:
         """
         Cập nhật nhanh các thuộc tính đặc biệt (is_pinned) của bài viết.
         """
+        from app.modules.article.models import ArticleTranslation
         from app.modules.category.models import CategoryTranslation
         from app.modules.tag.models import TagTranslation
-        from app.modules.article.models import ArticleTranslation
 
         stmt = (
             select(Article)
@@ -640,7 +692,7 @@ class ArticleService:
         )
         result = await db.execute(stmt)
         article = result.scalars().first()
-        
+
         if not article:
             raise NotFoundException(message="Không tìm thấy bài viết hoặc bài viết đã bị xóa.")
 
@@ -652,9 +704,9 @@ class ArticleService:
             article.is_pinned = payload.is_pinned
 
         if changes:
-            article.last_edited_at = datetime.now(timezone.utc)
+            article.last_edited_at = datetime.now(UTC)
             db.add(article)
-            
+
             # Ghi nhận audit log
             from app.modules.audit.service import log_action
             log_title = "Chưa dịch"
@@ -671,7 +723,7 @@ class ArticleService:
                 {"title": log_title, "attribute_changes": changes}
             )
             await db.commit()
-            
+
         return article
 
     async def create_article(
@@ -700,6 +752,7 @@ class ArticleService:
                         tag_ids.append(uuid.UUID(str(t.get("id"))))
                     except (ValueError, TypeError):
                         pass
+        tag_ids = list(dict.fromkeys(tag_ids))
 
         # 1. Kiểm tra Category & Content theo trạng thái xuất bản
         vi_trans = payload.translations.get("vi")
@@ -740,13 +793,13 @@ class ArticleService:
                 raise BadRequestException(message="Một hoặc nhiều thẻ tag không tồn tại hoặc đã bị xóa.")
 
         # 3. Kiểm tra validation khi lên lịch SCHEDULED
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         if payload.status == ArticleStatus.SCHEDULED and not payload.is_draft:
             if not payload.publish_at:
                 raise BadRequestException(message="Yêu cầu truyền thời gian xuất bản (publish_at) khi lên lịch.")
             if payload.publish_at <= now:
                 raise BadRequestException(message="Thời gian lên lịch xuất bản (publish_at) phải ở trong tương lai.")
-        
+
         # 4. Kiểm tra expire_at
         if payload.expire_at and payload.publish_at and payload.expire_at <= payload.publish_at:
             raise BadRequestException(message="Thời điểm hết hạn hiển thị (expire_at) phải lớn hơn thời điểm xuất bản.")
@@ -798,8 +851,8 @@ class ArticleService:
         await db.flush()  # Để lấy ID bài viết
 
         # 7. Ghi translations
-        from app.modules.language.models import Language
         from app.modules.article.models import ArticleTranslation
+        from app.modules.language.models import Language
         for lang_code, trans_item in payload.translations.items():
             if trans_item is None:
                 continue
@@ -808,10 +861,10 @@ class ArticleService:
             lang_id = lang_res.scalar()
             if not lang_id:
                 continue
-                
+
             trans_slug = trans_item.slug.strip() if trans_item.slug else slugify(trans_item.title)
             trans_slug = await self._resolve_unique_slug(db, trans_slug, lang_id)
-            
+
             translation = ArticleTranslation(
                 article_id=article.id,
                 language_id=lang_id,
@@ -828,7 +881,7 @@ class ArticleService:
                 og_image=trans_item.og_image
             )
             db.add(translation)
-            
+
         await db.flush()
 
         # 8. Ghi nhận Audit Log
@@ -846,7 +899,7 @@ class ArticleService:
             article.id,
             {"title": log_title, "status": article.status.value}
         )
-        
+
         await db.commit()
         db.expire(article, ["translations", "category", "tags"])
 
@@ -883,7 +936,7 @@ class ArticleService:
         Kiểm tra xem một slug đã tồn tại hay chưa, và gợi ý slug mới nếu trùng.
         """
         cleaned_slug = slugify(slug.strip()) if slug.strip() else "bai-viet"
-        
+
         # Kiểm tra sự tồn tại trong DB (trên các bài viết chưa bị xóa)
         from app.modules.article.models import ArticleTranslation
         stmt = (
@@ -896,10 +949,10 @@ class ArticleService:
         )
         res = await db.execute(stmt)
         exists = res.scalars().first() is not None
-        
+
         if not exists:
             return SlugCheckResponse(available=True, suggested_slug=cleaned_slug)
-            
+
         # Nếu đã tồn tại, chạy vòng lặp tìm hậu tố số
         suggested_slug = cleaned_slug
         counter = 1
@@ -917,7 +970,7 @@ class ArticleService:
             if not dup_res.scalars().first():
                 break
             counter += 1
-            
+
         return SlugCheckResponse(available=False, suggested_slug=suggested_slug)
 
     async def list_my_drafts(
@@ -933,9 +986,9 @@ class ArticleService:
         """
         from app.modules.category.models import CategoryTranslation
         from app.modules.tag.models import TagTranslation
-        
+
         offset = (page - 1) * page_size
-        
+
         # Query items
         stmt = (
             select(Article)
@@ -1057,7 +1110,7 @@ class ArticleService:
         from app.modules.article.models import ArticleTranslation
         from app.modules.category.models import CategoryTranslation
         from app.modules.tag.models import TagTranslation
-        
+
         stmt = (
             select(Article)
             .where(Article.id == article_id, Article.deleted_at == None)
@@ -1104,6 +1157,8 @@ class ArticleService:
                         tag_ids.append(uuid.UUID(str(t.get("id"))))
                     except (ValueError, TypeError):
                         pass
+        if tag_ids is not None:
+            tag_ids = list(dict.fromkeys(tag_ids))
 
         # 3. Kiểm tra Category & Content nếu bài viết được xuất bản/lên lịch (không phải nháp)
         target_is_draft = payload.is_draft if payload.is_draft is not None else article.is_draft
@@ -1151,7 +1206,7 @@ class ArticleService:
                 tags_list = []
 
         # 5. Kiểm tra thời gian lên lịch SCHEDULED
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         if target_status == ArticleStatus.SCHEDULED and not target_is_draft:
             target_publish_at = payload.publish_at if payload.publish_at is not None else article.publish_at
             if not target_publish_at:
@@ -1176,18 +1231,18 @@ class ArticleService:
             article.program_id = payload.program_id
         if payload.article_type is not None:
             article.article_type = payload.article_type
-        
+
         # publish_at & published_at
         published_at = article.published_at
         if not article.published_at and target_status == ArticleStatus.PUBLISHED and not target_is_draft:
             published_at = now
         article.published_at = published_at
-        
+
         if payload.publish_at is not None:
             article.publish_at = payload.publish_at
         elif target_status == ArticleStatus.PUBLISHED:
             article.publish_at = published_at
-            
+
         if payload.expire_at is not None:
             article.expire_at = payload.expire_at
         article.last_edited_at = now
@@ -1312,6 +1367,7 @@ class ArticleService:
             article_reloaded.id,
             {"title": log_title, "status": article_reloaded.status.value, "is_draft": article_reloaded.is_draft}
         )
+        await db.commit()
 
         will_be_published = (article_reloaded.status == ArticleStatus.PUBLISHED and not article_reloaded.is_draft)
         if will_be_published and not was_published:
@@ -1327,7 +1383,7 @@ class ArticleService:
         page: int = 1,
         page_size: int = 10,
         lang: str = "vi",
-    ) -> Tuple[list[Article], int]:
+    ) -> tuple[list[Article], int]:
         """
         Query danh sách bài viết công khai thuộc một danh mục cụ thể cho Portal FE Client.
         Truy vấn tối ưu hóa, hỗ trợ phân trang và nạp sẵn (avoid N+1) đầy đủ SEO metadata.
@@ -1350,24 +1406,26 @@ class ArticleService:
 
         # 2. Xây dựng Query lấy danh sách bài viết
         # Điều kiện: thuộc category, đã PUBLISHED, không bị xóa mềm, và publish_at <= hiện tại
-        now = datetime.now(timezone.utc)
-        
+        now = datetime.now(UTC)
+
         stmt = (
             select(Article)
             .where(
                 Article.category_id == category.id,
                 Article.status == ArticleStatus.PUBLISHED,
+                Article.is_draft.is_(False),
                 Article.deleted_at == None,
                 Article.publish_at <= now
             )
         )
-        
+
         # Query count
         count_stmt = (
             select(func.count(Article.id))
             .where(
                 Article.category_id == category.id,
                 Article.status == ArticleStatus.PUBLISHED,
+                Article.is_draft.is_(False),
                 Article.deleted_at == None,
                 Article.publish_at <= now
             )
@@ -1411,20 +1469,20 @@ class ArticleService:
         db: AsyncSession,
         slug: str,
         lang: str = "vi",
-        guest_uuid: Optional[str] = None,
-        client_ip: Optional[str] = None,
-        redis_client: Optional[Any] = None,
+        guest_uuid: str | None = None,
+        client_ip: str | None = None,
+        redis_client: Any | None = None,
     ) -> Article:
         """
         Lấy chi tiết một bài viết công khai theo slug cho Portal FE Client.
         Tự động tăng view_count của bài viết lên 1 nếu là lượt xem mới (kiểm tra qua Redis).
         """
-        now = datetime.now(timezone.utc)
-        from app.modules.language.models import Language
+        now = datetime.now(UTC)
         from app.modules.article.models import ArticleTranslation
         from app.modules.category.models import CategoryTranslation
+        from app.modules.language.models import Language
         from app.modules.tag.models import TagTranslation
-        
+
         lang_res = await db.execute(select(Language.id).where(Language.code == lang))
         lang_id = lang_res.scalar()
         if not lang_id:
@@ -1452,6 +1510,7 @@ class ArticleService:
             .where(
                 condition,
                 Article.status == ArticleStatus.PUBLISHED,
+                Article.is_draft.is_(False),
                 Article.deleted_at == None,
                 Article.publish_at <= now
             )
@@ -1467,35 +1526,54 @@ class ArticleService:
                 selectinload(Article.translations).selectinload(ArticleTranslation.language)
             )
         )
-        
+
         result = await db.execute(stmt)
         article = result.scalars().first()
         if not article:
-            raise NotFoundException(message=f"Không tìm thấy bài viết hoặc bài viết chưa được công bố.")
+            raise NotFoundException(message="Không tìm thấy bài viết hoặc bài viết chưa được công bố.")
+
+        safe_guest_uuid = None
+        if guest_uuid:
+            try:
+                safe_guest_uuid = str(uuid.UUID(guest_uuid))
+            except (ValueError, TypeError, AttributeError):
+                safe_guest_uuid = None
 
         # 2. Tăng view_count tự động nếu là lượt xem mới
         if redis_client:
-            guest_key = f"view_limit:article:{article.id}:guest:{guest_uuid}" if guest_uuid else None
+            guest_key = (
+                f"view_limit:article:{article.id}:guest:{safe_guest_uuid}"
+                if safe_guest_uuid
+                else None
+            )
             ip_key = f"view_limit:article:{article.id}:ip:{client_ip}" if client_ip else None
-            
+
             # Kiểm tra xem guest_uuid hoặc IP đã xem bài viết này chưa
             has_viewed = False
-            if guest_key and await redis_client.exists(guest_key):
-                has_viewed = True
-            if not has_viewed and ip_key and await redis_client.exists(ip_key):
-                has_viewed = True
+            try:
+                if guest_key and await redis_client.exists(guest_key):
+                    has_viewed = True
+                if not has_viewed and ip_key and await redis_client.exists(ip_key):
+                    has_viewed = True
+            except Exception as e:
+                logger.warning(f"Redis view check failed for article {article.id}: {e}")
 
             if not has_viewed:
                 # Tăng view trong DB thực tế
                 article.view_count += 1
                 db.add(article)
                 await db.commit()
-                
+
                 # Lưu trạng thái xem vào Redis để chống spam
-                if guest_key:
-                    await redis_client.set(guest_key, "1", ex=86400) # 24 giờ cho Guest
-                if ip_key:
-                    await redis_client.set(ip_key, "1", ex=180)     # 3 phút cho IP
+                try:
+                    if guest_key:
+                        await redis_client.set(guest_key, "1", ex=86400)
+                    if ip_key:
+                        await redis_client.set(ip_key, "1", ex=180)     # 3 phút cho IP
+                except Exception as e:
+                    logger.warning(
+                        f"Redis view cache set failed for article {article.id}: {e}"
+                    )
         else:
             article.view_count += 1
             db.add(article)
@@ -1518,29 +1596,29 @@ class ArticleService:
         *,
         page: int = 1,
         page_size: int = 10,
-        search: Optional[str] = None,
-        category_slug: Optional[str] = None,
-        department_id: Optional[uuid.UUID] = None,
-        program_id: Optional[uuid.UUID] = None,
-        article_type: Optional[str] = None,
-        category_slugs: Optional[list[str]] = None,
-        exclude_category_slugs: Optional[list[str]] = None,
-        tag_slug: Optional[str] = None,
-        author_username: Optional[str] = None,
-        is_pinned: Optional[bool] = None,
-        has_thumbnail: Optional[bool] = None,
-        published_from: Optional[datetime] = None,
-        published_to: Optional[datetime] = None,
+        search: str | None = None,
+        category_slug: str | None = None,
+        department_id: uuid.UUID | None = None,
+        program_id: uuid.UUID | None = None,
+        article_type: str | None = None,
+        category_slugs: list[str] | None = None,
+        exclude_category_slugs: list[str] | None = None,
+        tag_slug: str | None = None,
+        author_username: str | None = None,
+        is_pinned: bool | None = None,
+        has_thumbnail: bool | None = None,
+        published_from: datetime | None = None,
+        published_to: datetime | None = None,
         sort_by: str = "publish_at",
         sort_dir: str = "desc",
         lang: str = "vi",
-    ) -> Tuple[list[Article], int]:
+    ) -> tuple[list[Article], int]:
         """
         Query danh sách tất cả các bài viết công khai cho Portal FE Client.
         Hỗ trợ tìm kiếm, lọc theo slugs/flags, phân trang số và sắp xếp động tối ưu.
         """
         builder = ArticleQueryBuilder(db)
-        
+
         # Lấy language_id cho resolved_translation
         from app.modules.language.models import Language
         lang_res = await db.execute(select(Language.id).where(Language.code == lang))
@@ -1555,7 +1633,7 @@ class ArticleService:
         # Áp dụng Portal scope và eager load quan hệ
         builder.public_scope()
         builder.with_portal_relations()
-        
+
         # Đóng gói filter params
         filter_params = ArticleFilterParams(
             category_slug=category_slug,
@@ -1575,17 +1653,17 @@ class ArticleService:
             builder.query = builder.query.where(Article.program_id == program_id)
         if article_type:
             builder.query = builder.query.where(Article.article_type == article_type)
-        
+
         # Tìm kiếm Generic
         if search:
             builder.search(
                 fields=[ArticleTranslation.title, ArticleTranslation.excerpt, ArticleTranslation.content],
                 keyword=search
             )
-            
+
         # Đếm tổng
         total = await builder.get_total_count()
-        
+
         # Định đoạt Sort Strategy
         if sort_by != "publish_at":
             strategy = SortStrategy.CUSTOM
@@ -1595,14 +1673,14 @@ class ArticleService:
             strategy = SortStrategy.CATEGORY
         else:
             strategy = SortStrategy.HOME
-            
+
         builder.sort(
             strategy=strategy,
             sort_by=sort_by,
             sort_dir=sort_dir
         )
         builder.paginate(page=page, page_size=page_size)
-        
+
         # Thực thi
         items = await builder.execute()
 
@@ -1628,13 +1706,13 @@ class ArticleService:
         Xóa mềm bài viết bằng cách gán deleted_at.
         """
         article = await self.get_article_detail(db, article_id=article_id, current_user=current_user)
-        
+
         # Check quyền xóa: Phải là chủ sở hữu bài viết hoặc admin
         is_user_admin = getattr(current_user, "is_admin", False) or "admin" in getattr(current_user, "roles", []) or "super_admin" in getattr(current_user, "roles", [])
         if article.author_id != current_user.id and not is_user_admin:
             raise ForbiddenException(message="Bạn không có quyền xóa bài viết của tác giả khác.")
-        
-        article.deleted_at = datetime.now(timezone.utc)
+
+        article.deleted_at = datetime.now(UTC)
         db.add(article)
         await db.flush()
 
@@ -1665,9 +1743,9 @@ class ArticleService:
         """
         Khôi phục bài viết đã bị xóa mềm (deleted_at != None).
         """
+        from app.modules.article.models import ArticleTranslation
         from app.modules.category.models import CategoryTranslation
         from app.modules.tag.models import TagTranslation
-        from app.modules.article.models import ArticleTranslation
 
         # Query cả bài viết đã xóa (không lọc deleted_at == None)
         stmt = (
@@ -1687,7 +1765,7 @@ class ArticleService:
         )
         result = await db.execute(stmt)
         article = result.scalars().first()
-        
+
         if not article:
             raise NotFoundException(message="Không tìm thấy bài viết.")
 
@@ -1695,7 +1773,7 @@ class ArticleService:
 
         if article.deleted_at is not None:
             article.deleted_at = None
-            article.last_edited_at = datetime.now(timezone.utc)
+            article.last_edited_at = datetime.now(UTC)
             db.add(article)
             await db.flush()
 

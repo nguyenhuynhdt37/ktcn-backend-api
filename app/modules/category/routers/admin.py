@@ -1,7 +1,6 @@
 import uuid
-from typing import Optional
 
-from fastapi import APIRouter, Depends, Request, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -9,12 +8,12 @@ from app.modules.audit.service import log_action
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.schemas import UserResponse
 from app.modules.category.schemas import (
-    CategoryCreate,
-    CategoryReorderRequest,
-    CategoryUpdate,
-    CategorySlugCheckResponse,
     AdminCategoryResponse,
     AdminCategoryTreeNode,
+    CategoryCreate,
+    CategoryReorderRequest,
+    CategorySlugCheckResponse,
+    CategoryUpdate,
 )
 from app.modules.category.service import category_service
 
@@ -23,9 +22,10 @@ admin_router = APIRouter()
 
 @admin_router.get("", response_model=list[AdminCategoryResponse])
 async def list_categories_admin(
-    search: Optional[str] = None,
-    status: Optional[str] = None,
+    search: str | None = None,
+    status: str | None = None,
     only_has_articles: bool = Query(default=False, description="Chỉ lấy danh mục có chứa ít nhất 1 bài viết"),
+    current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[AdminCategoryResponse]:
     """
@@ -39,6 +39,7 @@ async def list_categories_admin(
 async def get_category_tree_admin(
     with_article_count: bool = Query(default=False, description="Bật thống kê số lượng bài viết đã xuất bản"),
     only_has_articles: bool = Query(default=False, description="Chỉ lấy cây danh mục có chứa bài viết đã xuất bản"),
+    current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[AdminCategoryTreeNode]:
     """
@@ -51,8 +52,9 @@ async def get_category_tree_admin(
 @admin_router.get("/check-slug", response_model=CategorySlugCheckResponse)
 async def check_category_slug_admin(
     slug: str,
-    exclude_id: Optional[uuid.UUID] = None,
+    exclude_id: uuid.UUID | None = None,
     lang: str = "vi",
+    current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> CategorySlugCheckResponse:
     """
@@ -65,6 +67,7 @@ async def check_category_slug_admin(
 @admin_router.get("/{category_id}", response_model=AdminCategoryResponse)
 async def get_category_admin(
     category_id: uuid.UUID,
+    current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> AdminCategoryResponse:
     """

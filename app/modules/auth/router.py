@@ -1,44 +1,49 @@
 import uuid
-from typing import List, Optional
-from fastapi import APIRouter, Cookie, Depends, Request, Response
+
 import redis.asyncio as aioredis
-from sqlalchemy import select
+from fastapi import APIRouter, Cookie, Depends, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.exceptions import TooManyRequestsException, UnauthorizedException, ForbiddenException
+from app.core.exceptions import (
+    ForbiddenException,
+    TooManyRequestsException,
+    UnauthorizedException,
+)
 from app.core.security import decode_access_token
-from app.modules.auth.dependencies import get_current_user, require_admin, require_self_or_admin
-from app.modules.auth.models import User
-from app.shared.client_ip import get_client_ip
-from app.shared.rate_limiter import check_rate_limit
-from app.shared.redis import get_redis
 from app.modules.audit.service import log_action
+from app.modules.auth.dependencies import (
+    get_current_user,
+    require_admin,
+    require_self_or_admin,
+)
 from app.modules.auth.schemas import (
     ActiveDeviceResponse,
     AnomalyReportResponse,
     LockUserResponse,
     LoginHistoryResponse,
     Token,
+    UserCreate,
+    UserDetailResponse,
+    UserListItemResponse,
+    UserListResponse,
     UserLogin,
     UserResponse,
-    UserListResponse,
-    UserListItemResponse,
     UserSessionResponse,
-    UserCreate,
     UserUpdate,
-    UserDetailResponse,
 )
-
 from app.modules.auth.service import AuthService, hash_token
+from app.shared.client_ip import get_client_ip
+from app.shared.rate_limiter import check_rate_limit, clear_memory_rate_limit
+from app.shared.redis import get_redis
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 users_router = APIRouter(prefix="/users", tags=["Users"])
 auth_service = AuthService()
 
 
-def set_auth_cookies(response: Response, access_token: str, refresh_token: str, request: Optional[Request] = None) -> None:
+def set_auth_cookies(response: Response, access_token: str, refresh_token: str, request: Request | None = None) -> None:
     """
     Helper to set the secure, HttpOnly access and refresh token cookies.
     """
@@ -112,7 +117,11 @@ async def login(
     )
 
     # Reset rate limit counter on successful login
-    await redis_client.delete(rate_key)
+    clear_memory_rate_limit(rate_key)
+    try:
+        await redis_client.delete(rate_key)
+    except Exception:
+        pass
 
     # Audit log: successful login (extract user_id from JWT)
     jwt_payload = decode_access_token(token_data.access_token)
@@ -132,7 +141,7 @@ async def login(
 async def refresh_token(
     request: Request,
     response: Response,
-    refresh_token: Optional[str] = Cookie(None),
+    refresh_token: str | None = Cookie(None),
     db: AsyncSession = Depends(get_db),
 ) -> Token:
     """
@@ -160,7 +169,7 @@ async def refresh_token(
 async def logout(
     request: Request,
     response: Response,
-    refresh_token: Optional[str] = Cookie(None),
+    refresh_token: str | None = Cookie(None),
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, bool]:
@@ -179,12 +188,12 @@ async def logout(
     return {"success": True}
 
 
-@router.get("/devices", response_model=List[ActiveDeviceResponse])
+@router.get("/devices", response_model=list[ActiveDeviceResponse])
 async def list_devices(
-    refresh_token: Optional[str] = Cookie(None),
+    refresh_token: str | None = Cookie(None),
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> List[ActiveDeviceResponse]:
+) -> list[ActiveDeviceResponse]:
     """
     List all active devices/sessions for the authenticated user.
     """
@@ -223,6 +232,7 @@ async def logout_all_devices(
     await auth_service.logout_all(db, current_user.id)
     await log_action(db, current_user, "AUTH_LOGOUT_ALL", "session", None, None, request)
     await db.commit()
+    response.delete_cookie(key="access_token", path="/")
     response.delete_cookie(key="refresh_token", path="/")
     return {"success": True}
 
@@ -251,10 +261,10 @@ async def check_email_exists(
 
 @users_router.get("", response_model=UserListResponse)
 async def list_users(
-    page: int = 1,
-    page_size: int = 10,
-    search: Optional[str] = None,
-    is_active: Optional[bool] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    search: str | None = None,
+    is_active: bool | None = None,
     is_deleted: bool = False,
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -292,7 +302,7 @@ async def list_users(
                 avatar_url = f"{protocol}://{settings.MINIO_ENDPOINT}/{settings.MINIO_BUCKET}/{avatar_url}"
         else:
             avatar_url = None
-            
+
         list_items.append(
             UserListItemResponse(
                 id=item.id,
@@ -307,7 +317,7 @@ async def list_users(
                 created_at=item.created_at,
             )
         )
-        
+
     return UserListResponse(
         items=list_items,
         total=total,
@@ -448,12 +458,12 @@ async def restore_user(
 
 # ─── Account Activity Endpoints ───────────────────────────────────────────────
 
-@users_router.get("/{user_id}/sessions", response_model=List[UserSessionResponse])
+@users_router.get("/{user_id}/sessions", response_model=list[UserSessionResponse])
 async def get_user_sessions(
     user_id: uuid.UUID,
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> List[UserSessionResponse]:
+) -> list[UserSessionResponse]:
     """
     Lấy danh sách tất cả phiên đăng nhập (còn hạn) của một tài khoản.
     Bao gồm cả phiên đang hoạt động và đã bị thu hồi.
@@ -465,9 +475,9 @@ async def get_user_sessions(
 @users_router.get("/{user_id}/login-history", response_model=LoginHistoryResponse)
 async def get_login_history(
     user_id: uuid.UUID,
-    page: int = 1,
-    page_size: int = 20,
-    status: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status: str | None = None,
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LoginHistoryResponse:

@@ -17,3 +17,10 @@ logs/
 *.bak-*
 deploy/
 backups/
+config.yaml
+omniroute/config.yaml
+omniroute/*.yaml
+*.sql
+*.tar.gz
+scratch/
+tmp/

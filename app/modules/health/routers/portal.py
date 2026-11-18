@@ -2,6 +2,7 @@ from typing import Any
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends
+from loguru import logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,13 +27,15 @@ async def health_check(
     try:
         await db.execute(text("SELECT 1"))
     except Exception as e:
-        postgres_status = f"unhealthy: {str(e)}"
+        logger.error(f"Healthcheck PostgreSQL failed: {e}")
+        postgres_status = "unhealthy"
 
     # Ping Redis
     try:
         await redis_client.ping()
     except Exception as e:
-        redis_status = f"unhealthy: {str(e)}"
+        logger.error(f"Healthcheck Redis failed: {e}")
+        redis_status = "unhealthy"
 
     is_healthy = postgres_status == "healthy" and redis_status == "healthy"
     status = "healthy" if is_healthy else "unhealthy"

@@ -1,29 +1,33 @@
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
-from app.modules.setting.footer_builder import FooterBuilder
 
-_DANGEROUS_SCHEMES = ("javascript:", "data:", "vbscript:")
+from app.modules.setting.footer_builder import FooterBuilder, safe_builder_url
 
 
-def _validate_safe_url(value: Optional[str], *, allow_empty: bool = False) -> str:
-    cleaned = (value or "").strip()
+def _validate_safe_url(value: str | None, *, allow_empty: bool = False) -> str:
+    cleaned = safe_builder_url(value)
     if not cleaned:
         return "" if allow_empty else "#"
-    lowered = cleaned.lower()
-    if any(lowered.startswith(scheme) for scheme in _DANGEROUS_SCHEMES):
-        raise ValueError("Đường dẫn không hợp lệ")
     return cleaned
 
 
-def resolve_setting_media_url(object_key: Optional[str]) -> Optional[str]:
+def resolve_setting_media_url(object_key: str | None) -> str | None:
     if not object_key:
         return None
     val = object_key.strip()
     if not val:
         return None
-    if val.startswith(("http://", "https://", "data:", "/")):
+    lowered = val.lower()
+    if lowered.startswith(("http://", "https://", "/")):
         return val
+    if (
+        lowered.startswith("data:image/")
+        and not lowered.startswith("data:image/svg+xml")
+    ):
+        return val
+    if lowered.startswith("data:"):
+        return None
     return f"/api/v1/portal/media/file/{val.lstrip('/')}"
 
 
@@ -98,9 +102,9 @@ class SiteSettingsPayload(BaseModel):
     footer_builder: FooterBuilder | None = None
     header_logo_width: int = Field(default=320, ge=80, le=600)
     header_logo_height: int = Field(default=56, ge=24, le=120)
-    header_logo_object_key: Optional[str] = Field(default=None, max_length=512)
-    footer_logo_object_key: Optional[str] = Field(default=None, max_length=512)
-    fanpage_image_object_key: Optional[str] = Field(default=None, max_length=512)
+    header_logo_object_key: str | None = Field(default=None, max_length=512)
+    footer_logo_object_key: str | None = Field(default=None, max_length=512)
+    fanpage_image_object_key: str | None = Field(default=None, max_length=512)
 
     logo_alt_vi: str = Field(
         default="Trường Kỹ thuật và Công nghệ - Trường Đại học Vinh",
@@ -162,7 +166,7 @@ class SiteSettingsPayload(BaseModel):
         mode="before",
     )
     @classmethod
-    def normalize_optional_key(cls, v: Any) -> Optional[str]:
+    def normalize_optional_key(cls, v: Any) -> str | None:
         if v is None:
             return None
         cleaned = str(v).strip()
@@ -196,6 +200,6 @@ class SiteSettingsPayload(BaseModel):
 
 
 class SiteSettingsResponse(SiteSettingsPayload):
-    header_logo_url: Optional[str] = None
-    footer_logo_url: Optional[str] = None
-    fanpage_image_url: Optional[str] = None
+    header_logo_url: str | None = None
+    footer_logo_url: str | None = None
+    fanpage_image_url: str | None = None

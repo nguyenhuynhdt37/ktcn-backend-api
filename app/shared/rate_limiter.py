@@ -1,5 +1,41 @@
-from loguru import logger
+import time
+from collections import deque
+
 import redis.asyncio as aioredis
+from loguru import logger
+
+_FALLBACK_MAX_KEYS = 10000
+_fallback_windows: dict[str, deque[float]] = {}
+
+
+def _check_memory_rate_limit(
+    key: str, max_attempts: int, window_seconds: int
+) -> tuple[bool, int, int]:
+    now = time.monotonic()
+    cutoff = now - window_seconds
+    bucket = _fallback_windows.get(key)
+    if bucket is None:
+        if len(_fallback_windows) >= _FALLBACK_MAX_KEYS:
+            oldest_key = next(iter(_fallback_windows))
+            _fallback_windows.pop(oldest_key, None)
+        bucket = deque()
+        _fallback_windows[key] = bucket
+
+    while bucket and bucket[0] <= cutoff:
+        bucket.popleft()
+
+    bucket.append(now)
+    current = len(bucket)
+    remaining = max(0, max_attempts - current)
+    allowed = current <= max_attempts
+    retry_after = 0
+    if not allowed and bucket:
+        retry_after = max(1, int(window_seconds - (now - bucket[0])))
+    return allowed, remaining, retry_after
+
+
+def clear_memory_rate_limit(key: str) -> None:
+    _fallback_windows.pop(key, None)
 
 
 async def check_rate_limit(
@@ -31,6 +67,8 @@ async def check_rate_limit(
 
         return allowed, remaining, 0 if allowed else ttl
     except Exception as e:
-        # If Redis is down, fail open (allow the request) to avoid blocking auth
-        logger.warning(f"Rate limiter Redis error (fail-open): {e}")
-        return True, max_attempts, 0
+        logger.warning(
+            f"Rate limiter Redis error for {key}: {e}. "
+            "Falling back to in-memory rate limiter."
+        )
+        return _check_memory_rate_limit(key, max_attempts, window_seconds)

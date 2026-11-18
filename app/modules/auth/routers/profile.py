@@ -3,27 +3,25 @@ Admin Profile Management Router.
 Prefix: /api/v1/admin/profile
 Tất cả endpoint chỉ thao tác trên tài khoản của user đang đăng nhập.
 """
-import uuid
-from typing import List, Optional
 
-from fastapi import APIRouter, Cookie, Depends, Request, Response
-from sqlalchemy import select, desc, func
+from fastapi import APIRouter, Depends, Query, Request, Response
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.modules.auth.dependencies import get_current_user
-from app.modules.auth.schemas import (
-    UserResponse,
-    MyProfileResponse,
-    ProfileUpdateRequest,
-    ChangePasswordRequest,
-    UserSessionResponse,
-    LoginHistoryResponse,
-)
-from app.modules.auth.service import AuthService, hash_token
-from app.modules.audit.service import log_action
 from app.modules.audit.models import AuditLog
 from app.modules.audit.schemas import AuditLogResponse
+from app.modules.audit.service import log_action
+from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.schemas import (
+    ChangePasswordRequest,
+    LoginHistoryResponse,
+    MyProfileResponse,
+    ProfileUpdateRequest,
+    UserResponse,
+    UserSessionResponse,
+)
+from app.modules.auth.service import AuthService
 
 router = APIRouter()
 auth_service = AuthService()
@@ -124,11 +122,11 @@ async def change_password(
     }
 
 
-@router.get("/sessions", response_model=List[UserSessionResponse])
+@router.get("/sessions", response_model=list[UserSessionResponse])
 async def get_my_sessions(
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> List[UserSessionResponse]:
+) -> list[UserSessionResponse]:
     """
     Lấy danh sách phiên đăng nhập của tài khoản hiện tại.
     """
@@ -137,9 +135,9 @@ async def get_my_sessions(
 
 @router.get("/login-history", response_model=LoginHistoryResponse)
 async def get_my_login_history(
-    page: int = 1,
-    page_size: int = 20,
-    status: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status: str | None = None,
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LoginHistoryResponse:
@@ -153,7 +151,7 @@ async def get_my_login_history(
 
 @router.get("/activity")
 async def get_my_activity(
-    limit: int = 10,
+    limit: int = Query(10, ge=1, le=50),
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -161,7 +159,6 @@ async def get_my_activity(
     Lấy nhật ký hoạt động gần đây của tài khoản hiện tại từ bảng audit_logs.
     Mặc định trả 10 bản ghi gần nhất.
     """
-    limit = min(limit, 50)  # Giới hạn tối đa 50
 
     stmt = (
         select(AuditLog)

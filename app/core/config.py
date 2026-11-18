@@ -1,4 +1,5 @@
 import json
+import secrets
 from typing import Annotated, Any
 
 from pydantic import BeforeValidator, model_validator
@@ -7,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 def parse_cors(v: Any) -> list[str]:
     if isinstance(v, str) and not v.startswith("["):
-        return [i.strip() for i in v.split(",")]
+        return [i.strip() for i in v.split(",") if i.strip()]
     elif isinstance(v, list | str):
         if isinstance(v, str):
             try:
@@ -27,13 +28,17 @@ class Settings(BaseSettings):
     )
 
     PROJECT_NAME: str = "University Portal Backend"
-    ENV: str = "development"
-    DEBUG: bool = True
+    ENV: str = "production"
+    DEBUG: bool = False
     API_V1_STR: str = "/api/v1"
 
     BACKEND_CORS_ORIGINS: Annotated[list[str], BeforeValidator(parse_cors)] = []
-    ALLOWED_HOSTS: Annotated[list[str], BeforeValidator(parse_cors)] = ["*"]
-    
+    ALLOWED_HOSTS: Annotated[list[str], BeforeValidator(parse_cors)] = [
+        "localhost",
+        "127.0.0.1",
+        "testserver",
+    ]
+
     # Security Configuration
     MAX_CONTENT_LENGTH: int = 10 * 1024 * 1024  # 10MB limit
     RATE_LIMIT_GLOBAL: str = "100/minute"
@@ -58,7 +63,7 @@ class Settings(BaseSettings):
     POSTGRES_SERVER: str = "localhost"
     POSTGRES_PORT: int = 5432
     POSTGRES_USER: str = "postgres"
-    POSTGRES_PASSWORD: str = "postgres_password"
+    POSTGRES_PASSWORD: str = ""
     POSTGRES_DB: str = "university_cms"
 
     SQLALCHEMY_DATABASE_URI: str = ""
@@ -90,9 +95,7 @@ class Settings(BaseSettings):
         return self
 
     # JWT Security
-    SECRET_KEY: str = (
-        "super-secret-key-change-in-production-super-secret-key-change-in-production"
-    )
+    SECRET_KEY: str = ""
     ALGORITHM: str = "HS256"
     # Access tokens cannot be revoked individually, so keep them short-lived;
     # the HttpOnly refresh token (rotated on use) carries the long session.
@@ -100,8 +103,35 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 8
 
     # Cookie Settings
-    COOKIE_SECURE: bool = False
+    COOKIE_SECURE: bool = True
     COOKIE_SAMESITE: str = "lax"
+
+    @model_validator(mode="after")
+    def apply_environment_security_defaults(self) -> "Settings":
+        env_lower = self.ENV.lower()
+        is_dev_or_test = env_lower in ("development", "dev", "test", "testing")
+
+        if "COOKIE_SECURE" not in self.model_fields_set and is_dev_or_test:
+            self.COOKIE_SECURE = False
+
+        # Backward compatible: when ALLOWED_HOSTS is not configured explicitly
+        # keep accepting any Host header (previous behaviour) so existing
+        # deployments do not break. Set ALLOWED_HOSTS in the environment to
+        # restrict it.
+        if "ALLOWED_HOSTS" not in self.model_fields_set:
+            self.ALLOWED_HOSTS = ["*"]
+
+        if self.ACCESS_TOKEN_EXPIRE_MINUTES > 60:
+            self.ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
+        if not self.SECRET_KEY:
+            if "ENV" in self.model_fields_set and env_lower == "production":
+                raise ValueError(
+                    "SECRET_KEY must be set via environment variable in production"
+                )
+            self.SECRET_KEY = secrets.token_urlsafe(48)
+
+        return self
 
     # Logging
     LOG_LEVEL: str = "INFO"
@@ -116,8 +146,8 @@ class Settings(BaseSettings):
     # MinIO / S3 Storage Config
     MINIO_ENDPOINT: str = "localhost:9000"
     MINIO_INTERNAL_ENDPOINT: str = ""
-    MINIO_ACCESS_KEY: str = "minio_admin"
-    MINIO_SECRET_KEY: str = "minio_password"
+    MINIO_ACCESS_KEY: str = ""
+    MINIO_SECRET_KEY: str = ""
     MINIO_SECURE: bool = False
     MINIO_BUCKET: str = "university-media"
 
@@ -131,7 +161,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     AI_PROVIDER: str = "omniroute"
     AI_BASE_URL: str = "http://localhost:8090"
-    AI_API_KEY: str = "sk-omniroute-secret-key"
+    AI_API_KEY: str = ""
     AI_DEFAULT_MODEL: str = "gemini-2.5-flash"
     AI_EMBEDDING_MODEL: str = "embedding-model"
 

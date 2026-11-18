@@ -1,6 +1,11 @@
 import pytest
 
-from scripts.import_remaining_programs import PROGRAMS
+from scripts.import_remaining_programs import PROGRAMS, SOURCE_ROOT
+
+pytestmark = pytest.mark.skipif(
+    not SOURCE_ROOT.exists(),
+    reason="Raw crawled dataset in scratch/legacy_programs_raw is not present",
+)
 
 EXPECTED_PROFILE_COUNTS = {
     "7520216": (3, 3, 114, 66),

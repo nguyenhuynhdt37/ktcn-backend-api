@@ -9,9 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.exceptions import TooManyRequestsException
-from app.shared.client_ip import get_client_ip, is_internal_call
-from app.shared.rate_limiter import check_rate_limit
-from app.shared.redis import get_redis
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.schemas import UserResponse
 from app.modules.consultation.models import ConsultationRequestType, ConsultationStatus
@@ -23,6 +20,9 @@ from app.modules.consultation.schemas import (
     ConsultationUpdate,
 )
 from app.modules.consultation.service import consultation_service
+from app.shared.client_ip import get_client_ip, is_internal_call
+from app.shared.rate_limiter import check_rate_limit
+from app.shared.redis import get_redis
 
 portal_router = APIRouter()
 admin_router = APIRouter()
@@ -93,6 +93,20 @@ async def list_consultations(
     )
 
 
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _sanitize_csv_cell(value: object) -> str:
+    """Ngăn chặn CSV Formula Injection khi mở file bằng Excel/Google Sheets."""
+    text = "" if value is None else str(value)
+    if text and (
+        text[0] in _CSV_FORMULA_PREFIXES
+        or text.lstrip(" ").startswith(_CSV_FORMULA_PREFIXES)
+    ):
+        return f"'{text}"
+    return text
+
+
 @admin_router.get("/export")
 async def export_consultations(
     search: str | None = Query(default=None, max_length=120),
@@ -130,16 +144,16 @@ async def export_consultations(
     for item in items:
         writer.writerow(
             [
-                item.reference_code,
-                item.full_name,
-                item.phone,
-                item.email,
-                item.interested_major,
-                item.request_type.value,
-                item.status.value,
-                item.created_at.isoformat(),
-                item.message or "",
-                item.admin_notes or "",
+                _sanitize_csv_cell(item.reference_code),
+                _sanitize_csv_cell(item.full_name),
+                _sanitize_csv_cell(item.phone),
+                _sanitize_csv_cell(item.email),
+                _sanitize_csv_cell(item.interested_major),
+                _sanitize_csv_cell(item.request_type.value),
+                _sanitize_csv_cell(item.status.value),
+                _sanitize_csv_cell(item.created_at.isoformat()),
+                _sanitize_csv_cell(item.message),
+                _sanitize_csv_cell(item.admin_notes),
             ]
         )
     return Response(

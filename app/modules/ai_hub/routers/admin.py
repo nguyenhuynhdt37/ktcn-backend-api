@@ -1,31 +1,30 @@
 import time
 import uuid
+
 import httpx
-from pathlib import Path
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
-from fastapi import APIRouter, Depends, status, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional
 
 from app.core.database import get_db
-from app.modules.auth.dependencies import get_current_user, require_admin
-from app.modules.auth.schemas import UserResponse
 from app.modules.ai_hub.schemas import (
-    AISettingsUpdateRequest,
-    AISettingsResponse,
-    AIPlaygroundRequest,
-    AIPlaygroundResponse,
-    AILogListResponse,
-    AISpendResponse,
     AIEmbeddingPlaygroundRequest,
     AIEmbeddingPlaygroundResponse,
+    AILogListResponse,
+    AIPlaygroundRequest,
+    AIPlaygroundResponse,
+    AISettingsResponse,
+    AISettingsUpdateRequest,
+    AISpendResponse,
 )
 from app.modules.ai_hub.service import ai_hub_service
+from app.modules.auth.dependencies import get_current_user, require_admin
+from app.modules.auth.schemas import UserResponse
 from app.shared.ai.config import (
-    get_active_model,
-    save_active_model,
     get_active_embedding_model,
+    get_active_model,
     save_active_embedding_model,
+    save_active_model,
 )
 
 ai_hub_router = APIRouter()
@@ -84,7 +83,7 @@ async def update_ai_settings(
     current_user: UserResponse = Depends(require_admin),
 ) -> dict[str, str]:
     """
-    Cập nhật model active (chat hoặc embedding) được chọn để sử dụng cho toàn bộ hệ thống.
+    Cập nhật model active (chat hoặc embedding) được chọn cho toàn bộ hệ thống.
     Yêu cầu token xác thực Admin.
     """
     updated = []
@@ -106,10 +105,10 @@ async def update_ai_settings(
 async def get_ai_logs(
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
-    model: Optional[str] = Query(None),
-    status_filter: Optional[str] = Query(None, alias="status"),
-    user_id: Optional[uuid.UUID] = Query(None),
-    model_type: Optional[str] = Query(None, enum=["chat", "embedding"]),
+    model: str | None = Query(None),
+    status_filter: str | None = Query(None, alias="status"),
+    user_id: uuid.UUID | None = Query(None),
+    model_type: str | None = Query(None, enum=["chat", "embedding"]),
     db: AsyncSession = Depends(get_db),
     current_user: UserResponse = Depends(require_admin),
 ) -> AILogListResponse:
@@ -141,16 +140,18 @@ async def get_ai_logs(
 )
 async def get_ai_spend(
     period: str = Query("day", enum=["day", "month", "year", "all"]),
-    model_type: Optional[str] = Query(None, enum=["chat", "embedding"]),
+    model_type: str | None = Query(None, enum=["chat", "embedding"]),
     db: AsyncSession = Depends(get_db),
     current_user: UserResponse = Depends(require_admin),
 ) -> AISpendResponse:
     """
-    Lấy dữ liệu thống kê chi tiêu (Spend Analytics) theo thời gian (ngày, tháng, năm, toàn bộ)
+    Lấy dữ liệu thống kê chi tiêu (Spend Analytics) theo thời gian
     và chi tiết phân bổ theo người dùng.
     Yêu cầu token xác thực Admin.
     """
-    time_series, user_spend = await ai_hub_service.get_spend_statistics(db, period=period, model_type=model_type)
+    time_series, user_spend = await ai_hub_service.get_spend_statistics(
+        db, period=period, model_type=model_type
+    )
     return AISpendResponse(time_series=time_series, user_spend=user_spend)
 
 
@@ -165,7 +166,7 @@ async def call_ai_playground(
     current_user: UserResponse = Depends(get_current_user),
 ) -> AIPlaygroundResponse:
     """
-    Thực hiện cuộc gọi thử nghiệm trực tiếp từ Playground (ghi nhận logs theo tên Admin đang đăng nhập).
+    Thực hiện cuộc gọi thử nghiệm trực tiếp từ Playground.
     Yêu cầu token xác thực Admin.
     """
     # Import cục bộ để tránh circular import
@@ -195,28 +196,28 @@ async def call_ai_playground(
         )
     except httpx.HTTPStatusError as e:
         # Lỗi phản hồi từ OmniRoute Gateway (hết token, API key lỗi, v.v.)
-        try:
-            err_data = e.response.json()
-            err_msg = err_data.get("error", {}).get("message") or e.response.text
-        except Exception:
-            err_msg = e.response.text
-        
+        logger.error(
+            f"OmniRoute Gateway Error in playground: "
+            f"{e.response.status_code} {e.response.text}"
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"OmniRoute Gateway Error: {err_msg}"
-        )
+            detail="OmniRoute Gateway Error",
+        ) from e
     except httpx.RequestError as e:
         # Lỗi kết nối mạng tới OmniRoute Gateway (timeout, connection refused)
+        logger.error(f"OmniRoute Gateway connection error in playground: {e}")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Không thể kết nối đến OmniRoute Gateway: {str(e)}"
-        )
+            detail="Không thể kết nối đến OmniRoute Gateway",
+        ) from e
     except Exception as e:
         # Các lỗi hệ thống khác
+        logger.exception(f"Unexpected error in playground: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Lỗi hệ thống khi gọi mô hình AI: {str(e)}"
-        )
+            detail="Lỗi hệ thống khi gọi mô hình AI",
+        ) from e
 
 
 @ai_hub_router.post(
@@ -230,7 +231,7 @@ async def call_ai_embedding_playground(
     current_user: UserResponse = Depends(get_current_user),
 ) -> AIEmbeddingPlaygroundResponse:
     """
-    Thực hiện vector hóa thử nghiệm từ Embedding Settings (ghi nhận logs theo tên Admin).
+    Thực hiện vector hóa thử nghiệm từ Embedding Settings.
     Yêu cầu token xác thực Admin.
     """
     from app.shared.ai import get_ai_service
@@ -249,7 +250,7 @@ async def call_ai_embedding_playground(
         )
         latency_ms = int((time.time() - start_time) * 1000)
         actual_model = response_meta.get("actual_model", payload.model)
-        
+
         return AIEmbeddingPlaygroundResponse(
             embedding=embedding,
             dimensions=len(embedding),
@@ -257,23 +258,24 @@ async def call_ai_embedding_playground(
             actual_model=actual_model
         )
     except httpx.HTTPStatusError as e:
-        try:
-            err_data = e.response.json()
-            err_msg = err_data.get("error", {}).get("message") or e.response.text
-        except Exception:
-            err_msg = e.response.text
+        logger.error(
+            f"OmniRoute Gateway Error in embedding playground: "
+            f"{e.response.status_code} {e.response.text}"
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"OmniRoute Gateway Error: {err_msg}"
-        )
+            detail="OmniRoute Gateway Error",
+        ) from e
     except httpx.RequestError as e:
+        logger.error(f"OmniRoute Gateway connection error in embedding playground: {e}")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Không thể kết nối đến OmniRoute Gateway: {str(e)}"
-        )
+            detail="Không thể kết nối đến OmniRoute Gateway",
+        ) from e
     except Exception as e:
+        logger.exception(f"Unexpected error in embedding playground: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Lỗi hệ thống khi gọi mô hình Embedding: {str(e)}"
-        )
+            detail="Lỗi hệ thống khi gọi mô hình Embedding",
+        ) from e
 

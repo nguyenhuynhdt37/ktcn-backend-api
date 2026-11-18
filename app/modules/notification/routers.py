@@ -1,7 +1,6 @@
 import asyncio
 import json
 import uuid
-from typing import Optional
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, Query, Request
@@ -10,15 +9,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.exceptions import NotFoundException
-from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.dependencies import get_current_user, get_current_user_optional
 from app.modules.auth.schemas import UserResponse
 from app.modules.notification.schemas import (
     MarkAllReadResponse,
     NotificationPaginationResponse,
     NotificationResponse,
-    UnreadCountResponse,
     PushSubscriptionCreate,
     PushSubscriptionUnsubscribe,
+    UnreadCountResponse,
 )
 from app.modules.notification.service import notification_service
 from app.shared.redis import get_redis
@@ -32,7 +31,7 @@ async def list_notifications(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     unread_only: bool = Query(default=False),
-    lang: Optional[str] = Query(default=None),
+    lang: str | None = Query(default=None),
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> NotificationPaginationResponse:
@@ -117,8 +116,8 @@ async def notification_stream(
     async def event_generator():
         pubsub = redis_client.pubsub()
         channel = f"admin-notifications:{current_user.id}"
-        await pubsub.subscribe(channel)
         try:
+            await pubsub.subscribe(channel)
             yield "event: ready\ndata: {}\n\n"
             while True:
                 message = await pubsub.get_message(
@@ -134,7 +133,10 @@ async def notification_stream(
                     yield ": heartbeat\n\n"
                 await asyncio.sleep(0.1)
         finally:
-            await pubsub.unsubscribe(channel)
+            try:
+                await pubsub.unsubscribe(channel)
+            except Exception:
+                pass
             await pubsub.close()
 
     return StreamingResponse(
@@ -163,24 +165,9 @@ async def subscribe_push_device(
     payload: PushSubscriptionCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    current_user: UserResponse | None = Depends(get_current_user_optional),
 ) -> dict:
-    current_user_id = None
-    
-    auth_header = request.headers.get("Authorization")
-    token = None
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header.split(" ")[1]
-    else:
-        token = request.cookies.get("access_token")
-        
-    if token:
-        try:
-            from app.modules.auth.service import auth_service
-            payload_data = auth_service.verify_token(token)
-            if payload_data and "sub" in payload_data:
-                current_user_id = uuid.UUID(payload_data["sub"])
-        except Exception:
-            pass
+    current_user_id = current_user.id if current_user else None
 
     if not payload.user_agent:
         payload.user_agent = request.headers.get("user-agent")
@@ -188,7 +175,7 @@ async def subscribe_push_device(
     await notification_service.subscribe_device(
         db,
         subscription_data=payload,
-        user_id=current_user_id
+        user_id=current_user_id,
     )
     return {"success": True, "message": "Đăng ký nhận thông báo đẩy thành công"}
 

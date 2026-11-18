@@ -2,29 +2,28 @@
 Global Search API — Tìm kiếm nhanh đa nguồn dữ liệu.
 Endpoint: GET /api/v1/admin/search?q=keyword&limit=5
 """
-import asyncio
-from typing import Optional
-
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, func, distinct
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.modules.auth.dependencies import get_current_user
-from app.modules.auth.schemas import UserResponse
 
 # Models
 from app.modules.article.models import Article, ArticleTranslation
+from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
+from app.modules.auth.schemas import UserResponse
 from app.modules.category.models import Category
-from app.modules.tag.models import Tag, TagTranslation
 from app.modules.staff.models import Staff
+from app.modules.tag.models import Tag, TagTranslation
 
 router = APIRouter()
 
 
-async def _search_articles(db: AsyncSession, keyword: str, limit: int) -> list[dict]:
-    """Tìm bài viết theo title trong ArticleTranslation. DISTINCT ON article_id để tránh trùng."""
+async def _search_articles(
+    db: AsyncSession, keyword: str, limit: int, current_user: UserResponse
+) -> list[dict]:
+    """Tìm bài viết theo title trong ArticleTranslation (DISTINCT ON article_id)."""
     from app.modules.category.models import CategoryTranslation
 
     stmt = (
@@ -46,7 +45,13 @@ async def _search_articles(db: AsyncSession, keyword: str, limit: int) -> list[d
             Article.deleted_at.is_(None),
             ArticleTranslation.title.ilike(f"%{keyword}%"),
         )
-        .distinct(Article.id)
+    )
+    if not current_user.is_admin:
+        stmt = stmt.where(
+            Article.is_draft.is_(False) | (Article.author_id == current_user.id)
+        )
+    stmt = (
+        stmt.distinct(Article.id)
         .order_by(Article.id, Article.created_at.desc())
         .limit(limit)
     )
@@ -64,24 +69,33 @@ async def _search_articles(db: AsyncSession, keyword: str, limit: int) -> list[d
     ]
 
 
-async def _search_users(db: AsyncSession, keyword: str, limit: int) -> list[dict]:
-    """Tìm user theo full_name, username, email."""
+async def _search_users(
+    db: AsyncSession, keyword: str, limit: int, include_email: bool
+) -> list[dict]:
+    """Tìm user theo full_name, username (và email nếu là admin)."""
+    keyword_filter = User.full_name.ilike(f"%{keyword}%") | User.username.ilike(
+        f"%{keyword}%"
+    )
+    if include_email:
+        keyword_filter = keyword_filter | User.email.ilike(f"%{keyword}%")
+
     stmt = (
         select(User.id, User.full_name, User.email, User.username)
         .where(
             User.deleted_at.is_(None),
-            (
-                User.full_name.ilike(f"%{keyword}%")
-                | User.username.ilike(f"%{keyword}%")
-                | User.email.ilike(f"%{keyword}%")
-            ),
+            keyword_filter,
         )
         .order_by(User.created_at.desc())
         .limit(limit)
     )
     result = await db.execute(stmt)
     return [
-        {"id": str(r.id), "full_name": r.full_name, "email": r.email, "username": r.username}
+        {
+            "id": str(r.id),
+            "full_name": r.full_name,
+            "email": r.email if include_email else None,
+            "username": r.username,
+        }
         for r in result.all()
     ]
 
@@ -158,19 +172,19 @@ async def global_search(
 ):
     """
     Tìm kiếm nhanh đa nguồn: bài viết, thành viên, danh mục, tags, nhân sự.
-    Chạy song song tất cả các query bằng asyncio.gather().
     """
     keyword = q.strip()
     if not keyword:
         return {"articles": [], "users": [], "categories": [], "tags": [], "staff": []}
 
-    articles, users, categories, tags, staff = await asyncio.gather(
-        _search_articles(db, keyword, limit),
-        _search_users(db, keyword, limit),
-        _search_categories(db, keyword, limit),
-        _search_tags(db, keyword, limit),
-        _search_staff(db, keyword, limit),
+    # SQLAlchemy AsyncSession không hỗ trợ chạy query song song trên 1 connection
+    articles = await _search_articles(db, keyword, limit, current_user)
+    users = await _search_users(
+        db, keyword, limit, include_email=bool(current_user.is_admin)
     )
+    categories = await _search_categories(db, keyword, limit)
+    tags = await _search_tags(db, keyword, limit)
+    staff = await _search_staff(db, keyword, limit)
 
     return {
         "articles": articles,

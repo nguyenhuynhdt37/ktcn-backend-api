@@ -1,16 +1,16 @@
-import uuid
 import enum
-from datetime import datetime, timezone
-from typing import Optional, List, Set
+import uuid
+from datetime import UTC, datetime
 
-from sqlalchemy import select, or_, desc, asc, func
-from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy import asc, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.modules.article.models import Article, ArticleStatus, ArticleTranslation
+from app.modules.auth.models import User
 from app.modules.category.models import Category
 from app.modules.tag.models import Tag
-from app.modules.auth.models import User
+
 
 # Định nghĩa SortStrategy Enum ở mức Database/Repository
 class SortStrategy(str, enum.Enum):
@@ -39,20 +39,20 @@ class ArticleFilterParams:
     """
     def __init__(
         self,
-        category_slug: Optional[str] = None,
-        category_slugs: Optional[List[str]] = None,
-        exclude_category_slugs: Optional[List[str]] = None,
-        tag_slug: Optional[str] = None,
-        author_username: Optional[str] = None,
-        category_id: Optional[uuid.UUID] = None,
-        tag_id: Optional[uuid.UUID] = None,
-        tag_ids: Optional[List[uuid.UUID]] = None,
-        author_id: Optional[uuid.UUID] = None,
-        is_pinned: Optional[bool] = None,
-        published_from: Optional[datetime] = None,
-        published_to: Optional[datetime] = None,
-        has_thumbnail: Optional[bool] = None,
-        status: Optional[ArticleStatus] = None,
+        category_slug: str | None = None,
+        category_slugs: list[str] | None = None,
+        exclude_category_slugs: list[str] | None = None,
+        tag_slug: str | None = None,
+        author_username: str | None = None,
+        category_id: uuid.UUID | None = None,
+        tag_id: uuid.UUID | None = None,
+        tag_ids: list[uuid.UUID] | None = None,
+        author_id: uuid.UUID | None = None,
+        is_pinned: bool | None = None,
+        published_from: datetime | None = None,
+        published_to: datetime | None = None,
+        has_thumbnail: bool | None = None,
+        status: ArticleStatus | None = None,
         deleted: bool = False
     ):
         self.category_slug = category_slug
@@ -99,7 +99,7 @@ class ArticleQueryBuilder:
 
     def public_scope(self):
         """Chỉ truy vấn các bài viết đã xuất bản, không nháp, không xóa mềm, đã đến giờ phát hành"""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         self.query = self.query.where(
             Article.status == ArticleStatus.PUBLISHED,
             Article.is_draft.is_(False),
@@ -169,7 +169,7 @@ class ArticleQueryBuilder:
 
         # --- Slug Filters (Dành riêng cho Portal Client) ---
         from app.modules.category.models import CategoryTranslation
-        
+
         # Gộp category_slug và category_slugs để lọc chọn
         slugs_to_filter = []
         if params.category_slug:
@@ -232,8 +232,8 @@ class ArticleQueryBuilder:
                 self.query = self.query.where(
                     Article.tags.any(
                         Tag.translations.any(
-                            (TagTranslation.slug == params.tag_slug) &
-                            (Language.code == "vi")
+                            TagTranslation.language.has(Language.code == "vi") &
+                            (TagTranslation.slug == params.tag_slug)
                         )
                     )
                 )
@@ -299,7 +299,7 @@ class ArticleQueryBuilder:
         """Chuẩn hóa phân trang bảo mật (Normalization)"""
         normalized_page = max(page, 1)
         normalized_page_size = min(max(page_size, 1), 100) # Khống chế tối đa 100 tin/trang
-        
+
         skip = (normalized_page - 1) * normalized_page_size
         self.query = self.query.offset(skip).limit(normalized_page_size)
         return self
@@ -308,10 +308,10 @@ class ArticleQueryBuilder:
         """Đếm tổng số bản ghi bằng phương pháp clone query & subquery tối ưu"""
         # Loại bỏ hoàn toàn order, offset và limit để tạo câu đếm sạch
         clean_query = self.query.order_by(None).offset(None).limit(None)
-        
+
         # Bọc thành subquery để PostgreSQL tự tối ưu hóa đếm tổng số dòng
         count_stmt = select(func.count()).select_from(clean_query.subquery())
-        
+
         result = await self.db.execute(count_stmt)
         return result.scalar() or 0
 

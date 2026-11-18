@@ -1,6 +1,6 @@
 import uuid
-from datetime import timezone
-from typing import Optional
+from datetime import UTC
+
 import jwt
 from fastapi import Cookie, Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -9,12 +9,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from app.core.config import settings
+from app.core.database import get_db
+from app.core.exceptions import ForbiddenException, UnauthorizedException
+from app.core.security import decode_access_token
+from app.modules.auth.models import User
+from app.modules.auth.schemas import TokenPayload, UserResponse
 
 
-def resolve_avatar_url(avatar_url: Optional[str]) -> Optional[str]:
+def resolve_avatar_url(avatar_url: str | None) -> str | None:
     if not avatar_url or avatar_url == "http://example.com/avatar.jpg":
         return None
-    if avatar_url.startswith("http://") or avatar_url.startswith("https://") or avatar_url.startswith("data:"):
+    if avatar_url.startswith(("http://", "https://", "data:")):
         return avatar_url
 
     protocol = "https" if settings.MINIO_SECURE else "http"
@@ -23,11 +28,6 @@ def resolve_avatar_url(avatar_url: Optional[str]) -> Optional[str]:
         avatar_url = avatar_url.replace(prefix, "")
     return f"{protocol}://{settings.MINIO_ENDPOINT}/{settings.MINIO_BUCKET}/{avatar_url}"
 
-from app.core.database import get_db
-from app.core.exceptions import ForbiddenException, UnauthorizedException
-from app.core.security import decode_access_token
-from app.modules.auth.models import User
-from app.modules.auth.schemas import TokenPayload, UserResponse
 
 reusable_oauth2_optional = HTTPBearer(auto_error=False)
 
@@ -48,7 +48,7 @@ def is_token_stale(user: User, issued_at: int | None) -> bool:
     if issued_at is None:
         return True
     if changed_at.tzinfo is None:
-        changed_at = changed_at.replace(tzinfo=timezone.utc)
+        changed_at = changed_at.replace(tzinfo=UTC)
     return issued_at < int(changed_at.timestamp())
 
 
@@ -62,12 +62,12 @@ def resolve_user_access(user: User) -> tuple[list[str], bool]:
 
 
 async def get_current_user_optional(
-    access_token: Optional[str] = Cookie(None),
-    http_auth: Optional[HTTPAuthorizationCredentials] = Depends(reusable_oauth2_optional),
+    access_token: str | None = Cookie(None),
+    http_auth: HTTPAuthorizationCredentials | None = Depends(reusable_oauth2_optional),
     db: AsyncSession = Depends(get_db),
 ) -> UserResponse | None:
     """
-    Optional user authentication. Returns UserResponse if a valid token is provided in cookie or header,
+    Optional user authentication. Returns UserResponse if a valid token is provided,
     otherwise returns None without raising UnauthorizedException.
     """
     token = access_token
@@ -90,11 +90,17 @@ async def get_current_user_optional(
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
 
-    if user is None or not user.is_active or is_token_stale(user, token_data.iat):
+    if (
+        user is None
+        or not user.is_active
+        or getattr(user, "deleted_at", None) is not None
+        or is_token_stale(user, token_data.iat)
+    ):
         return None
 
     roles, is_admin = resolve_user_access(user)
-    avatar_url = resolve_avatar_url(user.avatar.object_key if user.avatar else user.avatar_url)
+    raw_avatar = user.avatar.object_key if user.avatar else user.avatar_url
+    avatar_url = resolve_avatar_url(raw_avatar)
 
     return UserResponse(
         id=user.id,
@@ -109,12 +115,12 @@ async def get_current_user_optional(
 
 
 async def get_current_user(
-    access_token: Optional[str] = Cookie(None),
-    http_auth: Optional[HTTPAuthorizationCredentials] = Depends(reusable_oauth2_optional),
+    access_token: str | None = Cookie(None),
+    http_auth: HTTPAuthorizationCredentials | None = Depends(reusable_oauth2_optional),
     db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
     """
-    Retrieves the currently authenticated user by decoding the JWT access token from cookies (or header)
+    Retrieves the currently authenticated user by decoding the JWT access token
     and querying the PostgreSQL database.
     """
     token = access_token
@@ -158,7 +164,7 @@ async def get_current_user(
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
 
-    if user is None:
+    if user is None or getattr(user, "deleted_at", None) is not None:
         raise UnauthorizedException(
             message="Không tìm thấy người dùng",
             error_code="USER_NOT_FOUND"
@@ -175,7 +181,8 @@ async def get_current_user(
         )
 
     roles, is_admin = resolve_user_access(user)
-    avatar_url = resolve_avatar_url(user.avatar.object_key if user.avatar else user.avatar_url)
+    raw_avatar = user.avatar.object_key if user.avatar else user.avatar_url
+    avatar_url = resolve_avatar_url(raw_avatar)
 
     return UserResponse(
         id=user.id,

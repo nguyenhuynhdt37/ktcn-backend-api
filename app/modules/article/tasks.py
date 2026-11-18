@@ -1,11 +1,24 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from loguru import logger
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.core.database import SessionLocal
-from app.modules.article.models import Article, ArticleStatus
+from app.modules.article.models import Article, ArticleStatus, ArticleTranslation
 from app.modules.auth.models import User
+
+
+def _resolve_task_article_title(article: Article) -> str:
+    translations = getattr(article, "translations", None) or []
+    for t in translations:
+        if getattr(t, "language", None) and t.language.code == "vi" and t.title:
+            return t.title
+    for t in translations:
+        if getattr(t, "title", None):
+            return t.title
+    return getattr(article, "title", None) or "Chưa dịch"
 
 
 async def auto_publish_scheduled_articles() -> None:
@@ -15,7 +28,7 @@ async def auto_publish_scheduled_articles() -> None:
     """
     async with SessionLocal() as db:
         try:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             # 1. Tìm các bài viết SCHEDULED đã đến giờ xuất bản
             stmt = (
                 select(Article)
@@ -25,10 +38,13 @@ async def auto_publish_scheduled_articles() -> None:
                     Article.publish_at <= now,
                     Article.deleted_at == None
                 )
+                .options(
+                    selectinload(Article.translations).selectinload(ArticleTranslation.language)
+                )
             )
             res = await db.execute(stmt)
             articles = list(res.scalars().all())
-            
+
             if not articles:
                 return
 
@@ -46,7 +62,7 @@ async def auto_publish_scheduled_articles() -> None:
                 article.published_at = now
                 article.last_edited_at = now
                 db.add(article)
-                
+
                 if system_user:
                     # Ghi nhận audit log hành động tự động xuất bản
                     await log_action(
@@ -55,9 +71,13 @@ async def auto_publish_scheduled_articles() -> None:
                         "ARTICLE_AUTO_PUBLISHED",
                         "article",
                         article.id,
-                        {"title": article.title, "previous_status": previous_status, "scheduler": True}
+                        {
+                            "title": _resolve_task_article_title(article),
+                            "previous_status": previous_status,
+                            "scheduler": True,
+                        },
                     )
-            
+
             await db.commit()
             logger.info(f"[Scheduler] Đã tự động xuất bản thành công {len(articles)} bài viết lên lịch.")
         except Exception as ex:

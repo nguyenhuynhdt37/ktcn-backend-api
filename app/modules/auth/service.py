@@ -1,30 +1,33 @@
+import hashlib
 import uuid
-from typing import Tuple, List, Optional
-from datetime import datetime, timezone, timedelta
-from fastapi import Request
-from sqlalchemy import select, delete, func, desc, update
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
-from app.core.exceptions import UnauthorizedException, ForbiddenException, NotFoundException, BadRequestException
-from app.core.security import verify_password, hash_password, create_access_token
-from app.modules.auth.models import User, RefreshToken, LoginHistory
+from app.core.exceptions import (
+    BadRequestException,
+    ForbiddenException,
+    NotFoundException,
+    UnauthorizedException,
+)
+from app.core.security import create_access_token, hash_password, verify_password
+from app.modules.auth.models import LoginHistory, RefreshToken, User
 from app.modules.auth.schemas import (
-    UserLogin,
+    ActiveDeviceResponse,
+    AnomalyReportResponse,
+    LockUserResponse,
+    LoginHistoryItemResponse,
+    LoginHistoryResponse,
+    ProfileUpdateRequest,
     Token,
     UserCreate,
-    UserUpdate,
-    ProfileUpdateRequest,
-    ActiveDeviceResponse,
-    LoginHistoryResponse,
-    LoginHistoryItemResponse,
+    UserLogin,
     UserSessionResponse,
-    LockUserResponse,
-    AnomalyReportResponse,
-    AnomalyItem,
+    UserUpdate,
 )
-import hashlib
 
 
 def hash_token(token: str) -> str:
@@ -33,10 +36,10 @@ def hash_token(token: str) -> str:
 
 
 class AuthService:
-    
+
     async def authenticate(
-        self, db: AsyncSession, credentials: UserLogin, ip_address: str, user_agent: Optional[str]
-    ) -> Tuple[Token, str]:
+        self, db: AsyncSession, credentials: UserLogin, ip_address: str, user_agent: str | None
+    ) -> tuple[Token, str]:
         stmt = select(User).where(User.username == credentials.username)
         result = await db.execute(stmt)
         user = result.scalar_one_or_none()
@@ -44,21 +47,23 @@ class AuthService:
         if not user or not verify_password(credentials.password, user.password_hash):
             if user:
                 await self._log_login_attempt(db, user.id, ip_address, user_agent, "failed", "Sai mật khẩu")
+                await db.commit()
             raise UnauthorizedException(
                 message="Tên đăng nhập hoặc mật khẩu không chính xác",
                 error_code="INVALID_CREDENTIALS"
             )
 
-        if not user.is_active:
+        if not user.is_active or user.deleted_at is not None:
             await self._log_login_attempt(db, user.id, ip_address, user_agent, "failed", "Tài khoản bị khóa")
+            await db.commit()
             raise ForbiddenException(
                 message="Tài khoản đã bị vô hiệu hóa",
                 error_code="ACCOUNT_DISABLED"
             )
 
         # Update last login time
-        user.last_login = datetime.now(timezone.utc)
-        
+        user.last_login = datetime.now(UTC)
+
         # Log successful login
         await self._log_login_attempt(db, user.id, ip_address, user_agent, "success")
 
@@ -67,9 +72,9 @@ class AuthService:
         access_token = create_access_token(
             subject=str(user.id), expires_delta=access_token_expires
         )
-        
+
         refresh_token = str(uuid.uuid4())
-        refresh_token_expires = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+        refresh_token_expires = datetime.now(UTC) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
 
         new_rt = RefreshToken(
             user_id=user.id,
@@ -84,8 +89,8 @@ class AuthService:
         return Token(access_token=access_token), refresh_token
 
     async def issue_session(
-        self, db: AsyncSession, user_id: uuid.UUID, ip_address: str, user_agent: Optional[str]
-    ) -> Tuple[Token, str]:
+        self, db: AsyncSession, user_id: uuid.UUID, ip_address: str, user_agent: str | None
+    ) -> tuple[Token, str]:
         """
         Thu hồi mọi refresh token cũ và cấp một phiên mới cho thiết bị hiện tại.
         Dùng sau khi đổi mật khẩu để người dùng không bị văng khỏi phiên đang dùng.
@@ -103,7 +108,7 @@ class AuthService:
         db.add(RefreshToken(
             user_id=user_id,
             token_hash=hash_token(refresh_token),
-            expires_at=datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+            expires_at=datetime.now(UTC) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
             ip_address=ip_address,
             user_agent=user_agent,
         ))
@@ -111,7 +116,7 @@ class AuthService:
         return Token(access_token=access_token), refresh_token
 
     async def _log_login_attempt(
-        self, db: AsyncSession, user_id: uuid.UUID, ip_address: str, user_agent: Optional[str], status: str, reason: Optional[str] = None
+        self, db: AsyncSession, user_id: uuid.UUID, ip_address: str, user_agent: str | None, status: str, reason: str | None = None
     ):
         log = LoginHistory(
             user_id=user_id,
@@ -123,11 +128,15 @@ class AuthService:
         db.add(log)
 
     async def rotate_refresh_token(
-        self, db: AsyncSession, raw_refresh_token: str, ip_address: str, user_agent: Optional[str]
-    ) -> Tuple[Token, str]:
+        self, db: AsyncSession, raw_refresh_token: str, ip_address: str, user_agent: str | None
+    ) -> tuple[Token, str]:
         token_hash = hash_token(raw_refresh_token)
-        
-        stmt = select(RefreshToken).where(RefreshToken.token_hash == token_hash)
+
+        stmt = (
+            select(RefreshToken)
+            .where(RefreshToken.token_hash == token_hash)
+            .with_for_update()
+        )
         result = await db.execute(stmt)
         rt = result.scalar_one_or_none()
 
@@ -138,16 +147,16 @@ class AuthService:
             await self.logout_all(db, rt.user_id)
             raise UnauthorizedException(message="Token đã bị thu hồi", error_code="REVOKED_TOKEN")
 
-        if rt.expires_at < datetime.now(timezone.utc):
+        if rt.expires_at < datetime.now(UTC):
             raise UnauthorizedException(message="Token làm mới đã hết hạn", error_code="EXPIRED_REFRESH_TOKEN")
 
         rt.is_revoked = True
-        
+
         user_stmt = select(User).where(User.id == rt.user_id)
         user_result = await db.execute(user_stmt)
         user = user_result.scalar_one_or_none()
 
-        if not user or not user.is_active:
+        if not user or not user.is_active or user.deleted_at is not None:
             raise UnauthorizedException(message="Người dùng không hợp lệ", error_code="INVALID_USER")
 
         access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -156,7 +165,7 @@ class AuthService:
         )
 
         new_raw_refresh_token = str(uuid.uuid4())
-        refresh_token_expires = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+        refresh_token_expires = datetime.now(UTC) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
 
         new_rt = RefreshToken(
             user_id=user.id,
@@ -192,13 +201,13 @@ class AuthService:
             token.is_revoked = True
         await db.commit()
 
-    async def list_active_devices(self, db: AsyncSession, user_id: uuid.UUID, current_token_hash: Optional[str] = None) -> List[ActiveDeviceResponse]:
+    async def list_active_devices(self, db: AsyncSession, user_id: uuid.UUID, current_token_hash: str | None = None) -> list[ActiveDeviceResponse]:
         stmt = select(RefreshToken).where(
             RefreshToken.user_id == user_id,
             RefreshToken.is_revoked == False,
-            RefreshToken.expires_at > datetime.now(timezone.utc)
+            RefreshToken.expires_at > datetime.now(UTC)
         ).order_by(desc(RefreshToken.created_at))
-        
+
         result = await db.execute(stmt)
         tokens = result.scalars().all()
 
@@ -221,15 +230,15 @@ class AuthService:
         )
         result = await db.execute(stmt)
         token = result.scalar_one_or_none()
-        
+
         if not token:
             raise NotFoundException(message="Không tìm thấy thiết bị")
-            
+
         token.is_revoked = True
         await db.commit()
 
     async def get_users_page(
-        self, db: AsyncSession, page: int, page_size: int, search: Optional[str] = None, is_active: Optional[bool] = None, is_deleted: bool = False,
+        self, db: AsyncSession, page: int, page_size: int, search: str | None = None, is_active: bool | None = None, is_deleted: bool = False,
         search_contact: bool = True,
     ):
         if is_deleted:
@@ -242,7 +251,7 @@ class AuthService:
             if search_contact:
                 condition = condition | User.email.ilike(f"%{search}%")
             query = query.where(condition)
-        
+
         if is_active is not None:
             query = query.where(User.is_active == is_active)
 
@@ -304,7 +313,7 @@ class AuthService:
                 )
             user.password_hash = hash_password(password)
             # Vô hiệu hoá mọi phiên/tokens đã cấp trước thời điểm cấp lại mật khẩu
-            user.password_changed_at = datetime.now(timezone.utc)
+            user.password_changed_at = datetime.now(UTC)
             await db.execute(
                 update(RefreshToken)
                 .where(RefreshToken.user_id == user.id, RefreshToken.is_revoked == False)
@@ -328,8 +337,13 @@ class AuthService:
 
     async def delete_user(self, db: AsyncSession, user_id: uuid.UUID, current_user):
         user = await self.get_user_detail(db, user_id)
-        user.deleted_at = datetime.now(timezone.utc)
+        user.deleted_at = datetime.now(UTC)
         user.is_active = False
+        await db.execute(
+            update(RefreshToken)
+            .where(RefreshToken.user_id == user_id, RefreshToken.is_revoked.is_(False))
+            .values(is_revoked=True)
+        )
         await db.commit()
 
     async def restore_user(self, db: AsyncSession, user_id: uuid.UUID, current_user) -> User:
@@ -338,10 +352,10 @@ class AuthService:
         user = result.scalar_one_or_none()
         if not user:
             raise NotFoundException("User không tồn tại")
-        
+
         if user.deleted_at is None:
             raise BadRequestException("Tài khoản không ở trạng thái bị xóa mềm")
-            
+
         user.deleted_at = None
         user.is_active = True
         await db.commit()
@@ -358,7 +372,7 @@ class AuthService:
         result = await db.execute(stmt)
         return result.scalar() > 0
 
-    async def get_user_sessions(self, db: AsyncSession, user_id: uuid.UUID) -> List[UserSessionResponse]:
+    async def get_user_sessions(self, db: AsyncSession, user_id: uuid.UUID) -> list[UserSessionResponse]:
         stmt = select(RefreshToken).where(
             RefreshToken.user_id == user_id
         ).order_by(desc(RefreshToken.created_at))
@@ -375,7 +389,7 @@ class AuthService:
         ]
 
     async def get_login_history(
-        self, db: AsyncSession, user_id: uuid.UUID, page: int, page_size: int, status: Optional[str]
+        self, db: AsyncSession, user_id: uuid.UUID, page: int, page_size: int, status: str | None
     ) -> LoginHistoryResponse:
         query = select(LoginHistory).where(LoginHistory.user_id == user_id)
         if status:
@@ -424,6 +438,8 @@ class AuthService:
 
     async def unlock_user(self, db: AsyncSession, user_id: uuid.UUID) -> LockUserResponse:
         user = await self.get_user_detail(db, user_id)
+        if user.deleted_at is not None:
+            raise BadRequestException("Không thể mở khóa tài khoản đã bị xóa")
         user.is_active = True
         await db.commit()
         return LockUserResponse(success=True, message="Đã mở khóa tài khoản", user_id=user_id, is_active=True)
@@ -435,7 +451,7 @@ class AuthService:
             anomalies=[],
             active_session_count=0,
             failed_login_count_24h=0,
-            generated_at=datetime.now(timezone.utc)
+            generated_at=datetime.now(UTC)
         )
 
     # ─── Profile Management ──────────────────────────────────────────────────
@@ -492,5 +508,5 @@ class AuthService:
             raise BadRequestException("Mật khẩu mới không được trùng với mật khẩu hiện tại")
 
         user.password_hash = hash_password(new_password)
-        user.password_changed_at = datetime.now(timezone.utc)
+        user.password_changed_at = datetime.now(UTC)
         await db.commit()

@@ -5,12 +5,13 @@ Thiết kế theo Strategy Pattern: mỗi target_type đăng ký 1 resolver riê
 Khi mở rộng thêm PAGE, ARTICLE, DOCUMENT... → chỉ cần thêm 1 hàm resolve + register.
 """
 import uuid
-from typing import Callable, Awaitable, Optional
+from collections.abc import Awaitable, Callable
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import BadRequestException, NotFoundException
 
@@ -21,10 +22,10 @@ class TargetInfo(BaseModel):
     id: str
     type: str
     name: str
-    slug: Optional[str] = None
-    status: Optional[str] = None
-    path: Optional[str] = None  # breadcrumb path, VD: "Tin tức / Tuyển sinh"
-    is_weekly_schedule: Optional[bool] = None
+    slug: str | None = None
+    status: str | None = None
+    path: str | None = None  # breadcrumb path, VD: "Tin tức / Tuyển sinh"
+    is_weekly_schedule: bool | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -68,7 +69,7 @@ class TargetResolverRegistry:
             return  # Không block — cho phép target_type chưa có resolver (forward-compatible)
         await validator(db, target_id)
 
-    async def resolve(self, db: AsyncSession, target_type: str, target_id: uuid.UUID, lang: str = "vi") -> Optional[TargetInfo]:
+    async def resolve(self, db: AsyncSession, target_type: str, target_id: uuid.UUID, lang: str = "vi") -> TargetInfo | None:
         """Resolve thông tin chi tiết của 1 target."""
         resolver = self._resolvers.get(target_type)
         if not resolver:
@@ -113,9 +114,16 @@ class TargetResolverRegistry:
 
 async def _validate_category(db: AsyncSession, target_id: uuid.UUID) -> None:
     """Validate Category tồn tại, chưa bị xóa mềm, và đang ở trạng thái ACTIVE."""
-    from app.modules.category.models import Category
+    from app.modules.category.models import Category, CategoryTranslation
+    from app.modules.category.service import category_service
 
-    query = select(Category).where(Category.id == target_id)
+    query = (
+        select(Category)
+        .where(Category.id == target_id)
+        .options(
+            selectinload(Category.translations).selectinload(CategoryTranslation.language)
+        )
+    )
     result = await db.execute(query)
     category = result.scalar_one_or_none()
 
@@ -126,16 +134,22 @@ async def _validate_category(db: AsyncSession, target_id: uuid.UUID) -> None:
             details={"target_id": str(target_id)},
         )
 
+    category_service._apply_translation(category, lang="vi")
+    category_name = getattr(category, "name", None) or str(target_id)
+
     if category.deleted_at is not None:
         raise BadRequestException(
             message="Danh mục được liên kết đã bị xóa",
             error_code="TARGET_CATEGORY_DELETED",
-            details={"target_id": str(target_id), "name": category.name},
+            details={"target_id": str(target_id), "name": category_name},
         )
 
     if category.status != "ACTIVE":
         raise BadRequestException(
-            message=f"Danh mục '{category.name}' đang ở trạng thái '{category.status}'. Chỉ cho phép liên kết với danh mục đang hoạt động (ACTIVE).",
+            message=(
+                f"Danh mục '{category_name}' đang ở trạng thái '{category.status}'. "
+                "Chỉ cho phép liên kết với danh mục đang hoạt động (ACTIVE)."
+            ),
             error_code="TARGET_CATEGORY_NOT_ACTIVE",
             details={"target_id": str(target_id), "status": category.status},
         )
@@ -143,10 +157,16 @@ async def _validate_category(db: AsyncSession, target_id: uuid.UUID) -> None:
 
 async def _resolve_category(db: AsyncSession, target_id: uuid.UUID, lang: str = "vi") -> TargetInfo:
     """Resolve thông tin chi tiết của một Category (bao gồm breadcrumb path)."""
-    from app.modules.category.models import Category
+    from app.modules.category.models import Category, CategoryTranslation
     from app.modules.category.service import category_service
 
-    query = select(Category).where(Category.id == target_id, Category.deleted_at == None)
+    query = (
+        select(Category)
+        .where(Category.id == target_id, Category.deleted_at.is_(None))
+        .options(
+            selectinload(Category.translations).selectinload(CategoryTranslation.language)
+        )
+    )
     result = await db.execute(query)
     category = result.scalar_one_or_none()
 
@@ -167,8 +187,12 @@ async def _resolve_category(db: AsyncSession, target_id: uuid.UUID, lang: str = 
             break
         visited.add(current_parent_id)
 
-        parent_query = select(Category).where(
-            Category.id == current_parent_id, Category.deleted_at == None
+        parent_query = (
+            select(Category)
+            .where(Category.id == current_parent_id, Category.deleted_at.is_(None))
+            .options(
+                selectinload(Category.translations).selectinload(CategoryTranslation.language)
+            )
         )
         parent_result = await db.execute(parent_query)
         parent_row = parent_result.scalar_one_or_none()
@@ -197,14 +221,20 @@ async def _batch_resolve_categories(db: AsyncSession, target_ids: list[uuid.UUID
     Batch resolve nhiều categories cùng lúc bằng 1 câu IN query duy nhất.
     Sau đó build breadcrumb path cho từng category.
     """
-    from app.modules.category.models import Category
+    from app.modules.category.models import Category, CategoryTranslation
     from app.modules.category.service import category_service
 
     if not target_ids:
         return {}
 
     # 1. Query tất cả categories liên quan (bao gồm cả parents tiềm năng)
-    query = select(Category).where(Category.deleted_at == None)
+    query = (
+        select(Category)
+        .where(Category.deleted_at.is_(None))
+        .options(
+            selectinload(Category.translations).selectinload(CategoryTranslation.language)
+        )
+    )
     result = await db.execute(query)
     all_categories = {c.id: c for c in result.scalars().all()}
 
@@ -256,9 +286,16 @@ async def _batch_resolve_categories(db: AsyncSession, target_ids: list[uuid.UUID
 
 async def _validate_article(db: AsyncSession, target_id: uuid.UUID) -> None:
     """Validate Article tồn tại, chưa bị xóa mềm, và đang ở trạng thái PUBLISHED."""
-    from app.modules.article.models import Article, ArticleStatus
+    from app.modules.article.models import Article, ArticleStatus, ArticleTranslation
+    from app.modules.article.service import article_service
 
-    query = select(Article).where(Article.id == target_id)
+    query = (
+        select(Article)
+        .where(Article.id == target_id)
+        .options(
+            selectinload(Article.translations).selectinload(ArticleTranslation.language)
+        )
+    )
     result = await db.execute(query)
     article = result.scalar_one_or_none()
 
@@ -269,17 +306,23 @@ async def _validate_article(db: AsyncSession, target_id: uuid.UUID) -> None:
             details={"target_id": str(target_id)},
         )
 
+    article_service._apply_translation(article, lang="vi")
+    article_title = getattr(article, "title", None) or str(target_id)
+
     if article.deleted_at is not None:
         raise BadRequestException(
             message="Bài viết được liên kết đã bị xóa",
             error_code="TARGET_ARTICLE_DELETED",
-            details={"target_id": str(target_id), "title": article.title},
+            details={"target_id": str(target_id), "title": article_title},
         )
 
     status_val = article.status.value if hasattr(article.status, 'value') else article.status
     if status_val != ArticleStatus.PUBLISHED.value:
         raise BadRequestException(
-            message=f"Bài viết '{article.title}' đang ở trạng thái '{status_val}'. Chỉ cho phép liên kết với bài viết đã xuất bản (PUBLISHED).",
+            message=(
+                f"Bài viết '{article_title}' đang ở trạng thái '{status_val}'. "
+                "Chỉ cho phép liên kết với bài viết đã xuất bản (PUBLISHED)."
+            ),
             error_code="TARGET_ARTICLE_NOT_PUBLISHED",
             details={"target_id": str(target_id), "status": status_val},
         )
@@ -287,15 +330,23 @@ async def _validate_article(db: AsyncSession, target_id: uuid.UUID) -> None:
 
 async def _resolve_article(db: AsyncSession, target_id: uuid.UUID, lang: str = "vi") -> TargetInfo:
     """Resolve thông tin chi tiết của một Article."""
-    from app.modules.article.models import Article
+    from app.modules.article.models import Article, ArticleTranslation
+    from app.modules.article.service import article_service
 
-    query = select(Article).where(Article.id == target_id, Article.deleted_at == None)
+    query = (
+        select(Article)
+        .where(Article.id == target_id, Article.deleted_at.is_(None))
+        .options(
+            selectinload(Article.translations).selectinload(ArticleTranslation.language)
+        )
+    )
     result = await db.execute(query)
     article = result.scalar_one_or_none()
 
     if not article:
         return TargetInfo(id=str(target_id), type="ARTICLE", name="[Đã xóa]", status="DELETED")
 
+    article_service._apply_translation(article, lang=lang)
     status_val = article.status.value if hasattr(article.status, 'value') else article.status
     return TargetInfo(
         id=str(article.id),
@@ -309,12 +360,19 @@ async def _resolve_article(db: AsyncSession, target_id: uuid.UUID, lang: str = "
 
 async def _batch_resolve_articles(db: AsyncSession, target_ids: list[uuid.UUID], lang: str = "vi") -> dict[uuid.UUID, TargetInfo]:
     """Batch resolve nhiều articles cùng lúc bằng 1 câu IN query."""
-    from app.modules.article.models import Article
+    from app.modules.article.models import Article, ArticleTranslation
+    from app.modules.article.service import article_service
 
     if not target_ids:
         return {}
 
-    query = select(Article).where(Article.id.in_(target_ids), Article.deleted_at == None)
+    query = (
+        select(Article)
+        .where(Article.id.in_(target_ids), Article.deleted_at.is_(None))
+        .options(
+            selectinload(Article.translations).selectinload(ArticleTranslation.language)
+        )
+    )
     result = await db.execute(query)
     articles = {a.id: a for a in result.scalars().all()}
 
@@ -325,6 +383,7 @@ async def _batch_resolve_articles(db: AsyncSession, target_ids: list[uuid.UUID],
             resolved[t_id] = TargetInfo(id=str(t_id), type="ARTICLE", name="[Đã xóa]", status="DELETED")
             continue
 
+        article_service._apply_translation(art, lang=lang)
         status_val = art.status.value if hasattr(art.status, 'value') else art.status
         resolved[t_id] = TargetInfo(
             id=str(art.id),

@@ -1,33 +1,33 @@
 import uuid
 from datetime import datetime
-from typing import Optional, Any
-from fastapi import APIRouter, Depends, Query, status, HTTPException
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.modules.auth.dependencies import get_current_user
-from app.modules.auth.schemas import UserResponse
 from app.modules.article.models import ArticleStatus
 from app.modules.article.schemas import (
-    ArticleCreateRequest,
-    ArticleUpdateRequest,
     AdminArticleResponse,
-    BulkStatusUpdateRequest,
-    BulkActionResponse,
-    ArticleStatsResponse,
     ArticleAttributesUpdateRequest,
-    SlugCheckResponse,
+    ArticleCreateRequest,
     ArticleDraftsCountResponse,
+    ArticleGenerateByIdeaRequest,
+    ArticleGenerateByIdeaResponse,
     ArticleSEOAnalyzeRequest,
     ArticleSEOAnalyzeResponse,
     ArticleSEORewriteRequest,
     ArticleSEORewriteResponse,
-    ArticleGenerateByIdeaRequest,
-    ArticleGenerateByIdeaResponse,
+    ArticleStatsResponse,
     ArticleSummaryRequest,
     ArticleSummaryResponse,
+    ArticleUpdateRequest,
+    BulkActionResponse,
+    BulkStatusUpdateRequest,
+    SlugCheckResponse,
 )
 from app.modules.article.service import article_service
+from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.schemas import UserResponse
 
 router = APIRouter()
 
@@ -36,7 +36,8 @@ class AdminArticlePaginationResponse(AdminArticleResponse.__base__ or object):
     pass
 
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+
 
 class ArticlePaginationResponse(BaseModel):
     items: list[AdminArticleResponse]
@@ -52,22 +53,22 @@ class ArticlePaginationResponse(BaseModel):
 async def list_articles(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=100),
-    search: Optional[str] = Query(default=None),
-    category_id: Optional[uuid.UUID] = Query(default=None),
-    category_slugs: Optional[list[str]] = Query(default=None, alias="category_slugs"),
-    category_slugs_arr: Optional[list[str]] = Query(default=None, alias="category_slugs[]"),
-    exclude_category_slugs: Optional[list[str]] = Query(default=None, alias="exclude_category_slugs"),
-    exclude_category_slugs_arr: Optional[list[str]] = Query(default=None, alias="exclude_category_slugs[]"),
-    author_id: Optional[uuid.UUID] = Query(default=None),
-    tag_ids: Optional[list[str]] = Query(default=None, alias="tag_ids"),
-    tag_ids_arr: Optional[list[str]] = Query(default=None, alias="tag_ids[]"),
-    status: Optional[ArticleStatus] = Query(default=None),
-    is_pinned: Optional[bool] = Query(default=None),
-    is_draft: Optional[bool] = Query(default=False),
-    created_from: Optional[datetime] = Query(default=None),
-    created_to: Optional[datetime] = Query(default=None),
-    published_from: Optional[datetime] = Query(default=None),
-    published_to: Optional[datetime] = Query(default=None),
+    search: str | None = Query(default=None),
+    category_id: uuid.UUID | None = Query(default=None),
+    category_slugs: list[str] | None = Query(default=None, alias="category_slugs"),
+    category_slugs_arr: list[str] | None = Query(default=None, alias="category_slugs[]"),
+    exclude_category_slugs: list[str] | None = Query(default=None, alias="exclude_category_slugs"),
+    exclude_category_slugs_arr: list[str] | None = Query(default=None, alias="exclude_category_slugs[]"),
+    author_id: uuid.UUID | None = Query(default=None),
+    tag_ids: list[str] | None = Query(default=None, alias="tag_ids"),
+    tag_ids_arr: list[str] | None = Query(default=None, alias="tag_ids[]"),
+    status: ArticleStatus | None = Query(default=None),
+    is_pinned: bool | None = Query(default=None),
+    is_draft: bool | None = Query(default=False),
+    created_from: datetime | None = Query(default=None),
+    created_to: datetime | None = Query(default=None),
+    published_from: datetime | None = Query(default=None),
+    published_to: datetime | None = Query(default=None),
     deleted: bool = Query(default=False),
     sort_by: str = Query(default="created_at"),
     sort_dir: str = Query(default="desc"),
@@ -269,7 +270,8 @@ async def bulk_status_update(
 @router.get("/check-slug", response_model=SlugCheckResponse)
 async def check_slug_availability(
     slug: str = Query(..., min_length=1),
-    db: AsyncSession = Depends(get_db)
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> SlugCheckResponse:
     return await article_service.check_slug_availability(db, slug=slug)
 

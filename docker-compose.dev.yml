@@ -8,7 +8,7 @@ services:
     container_name: be_redis
     restart: always
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -22,12 +22,12 @@ services:
     container_name: omniroute_gateway
     restart: always
     ports:
-      - "8090:4000"
+      - "127.0.0.1:8090:4000"
     volumes:
       - ./omniroute/config.yaml:/app/config.yaml
     command: [ "--config", "/app/config.yaml", "--port", "4000", "--detailed_debug" ]
     environment:
-      - LITELLM_MASTER_KEY=sk-omniroute-secret-key
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-${AI_API_KEY:?Set AI_API_KEY or LITELLM_MASTER_KEY in .env}}
 
 volumes:
   redis_data:

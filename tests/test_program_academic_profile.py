@@ -2,7 +2,12 @@ import pytest
 from pydantic import ValidationError
 
 from app.modules.program.schemas import ProgramAcademicProfileInput
-from scripts.import_electronics_program import build_profile
+from scripts.import_electronics_program import SOURCE_DIR, build_profile
+
+pytestmark = pytest.mark.skipif(
+    not SOURCE_DIR.exists(),
+    reason="Raw crawled dataset in scratch/legacy_programs_raw is not present",
+)
 
 
 def test_electronics_program_profile_matches_crawled_dataset() -> None:

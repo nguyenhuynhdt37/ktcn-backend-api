@@ -1,14 +1,16 @@
 import time
 import uuid
+
+import redis.asyncio as aioredis
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-import redis.asyncio as aioredis
 
-from app.core.config import settings
 import app.shared.redis as redis_shared
+from app.core.config import settings
 from app.core.database import SessionLocal
 from app.modules.statistics.service import statistics_service
 from app.shared.client_ip import get_client_ip
+
 
 class VisitorCounterMiddleware(BaseHTTPMiddleware):
     """
@@ -24,44 +26,62 @@ class VisitorCounterMiddleware(BaseHTTPMiddleware):
         is_stats_api = path.startswith("/api/v1/portal/statistics")
 
         if is_portal_api:
-            # Lọc User-Agent để tránh đếm các request từ Next.js Server (SSR) hoặc bots/libraries
+            # Lọc User-Agent để tránh đếm các request từ Next.js Server (SSR) hoặc bots
             user_agent = request.headers.get("user-agent", "").lower()
             is_browser = "mozilla" in user_agent
-            is_bot_or_library = any(
-                tech in user_agent 
-                for tech in ["node-fetch", "undici", "axios", "python", "curl", "postman", "googlebot", "bingbot", "yandexbot"]
+            bot_keywords = (
+                "node-fetch",
+                "undici",
+                "axios",
+                "python",
+                "curl",
+                "postman",
+                "googlebot",
+                "bingbot",
+                "yandexbot",
             )
-            
+            is_bot_or_library = any(tech in user_agent for tech in bot_keywords)
+
             # Chỉ ghi nhận nếu là trình duyệt thực sự và không phải bot/library
             if is_browser and not is_bot_or_library:
-                # 1. Lấy guest_uuid từ Cookie
-                guest_uuid = request.cookies.get("guest_uuid")
+                # 1. Lấy và kiểm tra UUID cho guest_uuid từ cookie
+                raw_guest_uuid = request.cookies.get("guest_uuid")
                 is_new_guest = False
-                
+                try:
+                    guest_uuid = (
+                        str(uuid.UUID(raw_guest_uuid)) if raw_guest_uuid else ""
+                    )
+                except (ValueError, TypeError, AttributeError):
+                    guest_uuid = ""
+
                 if not guest_uuid:
                     guest_uuid = str(uuid.uuid4())
                     is_new_guest = True
-                    
+
                 # 2. Xác định IP khách hàng
                 client_ip = get_client_ip(request)
-                    
+
                 # 3. Ghi nhận lượt xem và trạng thái online
                 if redis_shared.redis_pool:
-                    redis_client = aioredis.Redis(connection_pool=redis_shared.redis_pool)
+                    redis_client = aioredis.Redis(
+                        connection_pool=redis_shared.redis_pool
+                    )
                     try:
                         if is_stats_api:
-                            # Chỉ ghi nhận sự hiện diện (online) vào Redis, KHÔNG tăng tổng lượt truy cập
-                            await redis_client.zadd("online_users", {guest_uuid: time.time()})
+                            # Chỉ ghi nhận sự hiện diện (online) vào Redis
+                            await redis_client.zadd(
+                                "online_users", {guest_uuid: time.time()}
+                            )
                         else:
-                            # Ghi nhận lượt xem thông thường (có tăng tổng lượt truy cập nếu hợp lệ)
+                            # Ghi nhận lượt xem thông thường
                             async with SessionLocal() as db:
                                 await statistics_service.record_visit(
                                     guest_uuid=guest_uuid,
                                     client_ip=client_ip,
                                     redis_client=redis_client,
-                                    db=db
+                                    db=db,
                                 )
-                    except Exception as e:
+                    except Exception:
                         from loguru import logger
                         logger.exception("Error in visitor counter middleware")
                     finally:
@@ -69,7 +89,7 @@ class VisitorCounterMiddleware(BaseHTTPMiddleware):
 
                 # 4. Tiếp tục xử lý request
                 response = await call_next(request)
-                
+
                 # 5. Lưu cookie guest_uuid nếu là khách mới
                 if is_new_guest:
                     response.set_cookie(
@@ -82,5 +102,5 @@ class VisitorCounterMiddleware(BaseHTTPMiddleware):
                         path="/"
                     )
                 return response
-            
+
         return await call_next(request)

@@ -1,10 +1,9 @@
 import uuid
-from typing import Optional
 
 from loguru import logger
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import (
     BadRequestException,
@@ -24,7 +23,6 @@ from app.modules.menu.schemas import (
     build_menu_item_resolved,
 )
 from app.modules.menu.target_resolver import TargetInfo, target_resolver
-
 
 MAX_DEPTH = 3
 
@@ -124,7 +122,7 @@ class MenuService:
     # ──────────────────────────────────────────
 
     def _to_item_response(
-        self, item: MenuItem, target_info: Optional[TargetInfo] = None
+        self, item: MenuItem, target_info: TargetInfo | None = None
     ) -> MenuItemResponse:
         """Convert MenuItem model thành MenuItemResponse với computed has_link và target_info."""
         res_dict = build_menu_item_resolved(item)
@@ -153,7 +151,7 @@ class MenuService:
         return item
 
     async def _calculate_depth(
-        self, db: AsyncSession, parent_id: Optional[uuid.UUID]
+        self, db: AsyncSession, parent_id: uuid.UUID | None
     ) -> int:
         """Tính depth dựa trên parent. Root = 1."""
         if parent_id is None:
@@ -171,7 +169,7 @@ class MenuService:
         return parent.depth + 1
 
     async def _check_circular_reference(
-        self, db: AsyncSession, item_id: uuid.UUID, new_parent_id: Optional[uuid.UUID]
+        self, db: AsyncSession, item_id: uuid.UUID, new_parent_id: uuid.UUID | None
     ) -> None:
         """
         Kiểm tra circular reference khi thay đổi parent_id.
@@ -421,7 +419,7 @@ class MenuService:
         resolved_info = None
         if item.target_type and item.target_type != MenuItemTargetType.EXTERNAL_LINK and item.target_id:
             resolved_info = await target_resolver.resolve(db, item.target_type.value, item.target_id, lang=lang)
-        
+
         self._apply_translation(item, lang=lang)
         return self._to_item_response(item, target_info=resolved_info)
 
@@ -469,7 +467,7 @@ class MenuService:
         # Apply updates cho translations
         if "translations" in update_data and update_data["translations"]:
             from app.modules.language.models import Language
-            
+
             lang_res = await db.execute(select(Language))
             languages = lang_res.scalars().all()
             lang_map = {l.code: l.id for l in languages}
@@ -591,7 +589,7 @@ class MenuService:
     def _build_tree(
         self,
         items: list[MenuItem],
-        resolved_map: Optional[dict[uuid.UUID, TargetInfo]] = None,
+        resolved_map: dict[uuid.UUID, TargetInfo] | None = None,
     ) -> list[MenuItemTreeNode]:
         """Build tree từ flat list menu items, gắn kèm target_info đã resolve."""
         if resolved_map is None:
@@ -648,9 +646,22 @@ class MenuService:
                         "menu_id": str(menu_id),
                     },
                 )
+            if (
+                reorder_item.parent_id is not None
+                and reorder_item.parent_id not in existing_items
+            ):
+                raise NotFoundException(
+                    message="Menu item cha không thuộc menu này",
+                    error_code="MENU_PARENT_NOT_FOUND",
+                    details={
+                        "item_id": str(reorder_item.id),
+                        "parent_id": str(reorder_item.parent_id),
+                        "menu_id": str(menu_id),
+                    },
+                )
 
         # Build new parent map để check circular + depth
-        new_parent_map: dict[uuid.UUID, Optional[uuid.UUID]] = {}
+        new_parent_map: dict[uuid.UUID, uuid.UUID | None] = {}
         for reorder_item in data.items:
             new_parent_map[reorder_item.id] = reorder_item.parent_id
 
@@ -727,7 +738,7 @@ class MenuService:
         db: AsyncSession,
         parent_id: uuid.UUID,
         depth_cache: dict[uuid.UUID, int],
-        reorder_map: dict[uuid.UUID, Optional[uuid.UUID]],
+        reorder_map: dict[uuid.UUID, uuid.UUID | None],
         existing_items: dict[uuid.UUID, MenuItem],
     ) -> None:
         """Recalculate depth cho children không nằm trong reorder list."""

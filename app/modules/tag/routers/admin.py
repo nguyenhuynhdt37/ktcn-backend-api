@@ -1,13 +1,19 @@
 import uuid
-from typing import Optional
-from fastapi import APIRouter, Depends, Request, status, Query
+
+from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.modules.audit.service import log_action
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.schemas import UserResponse
-from app.modules.tag.schemas import TagCreate, AdminTagResponse, TagStatusUpdate, TagUpdate, TagSlugCheckResponse
+from app.modules.tag.schemas import (
+    AdminTagResponse,
+    TagCreate,
+    TagSlugCheckResponse,
+    TagStatusUpdate,
+    TagUpdate,
+)
 from app.modules.tag.service import tag_service
 from app.shared.pagination import PaginatedResponse, PaginationParams
 
@@ -16,15 +22,22 @@ router = APIRouter()
 
 @router.get("", response_model=PaginatedResponse[AdminTagResponse])
 async def list_tags(
-    search: Optional[str] = None,
-    is_active: Optional[bool] = None,
+    search: str | None = None,
+    is_active: bool | None = None,
     only_has_articles: bool = Query(default=False),
     lang: str = Query(default="vi"),
     params: PaginationParams = Depends(),
+    current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedResponse[AdminTagResponse]:
     tags, total = await tag_service.list_tags(
-        db, search=search, is_active=is_active, only_has_articles=only_has_articles, page=params.page, limit=params.limit, lang=lang
+        db,
+        search=search,
+        is_active=is_active,
+        only_has_articles=only_has_articles,
+        page=params.page,
+        limit=params.limit,
+        lang=lang,
     )
     response_items = [AdminTagResponse.model_validate(tag) for tag in tags]
     return PaginatedResponse.create(items=response_items, total=total, params=params)
@@ -33,8 +46,9 @@ async def list_tags(
 @router.get("/check-slug", response_model=TagSlugCheckResponse)
 async def check_tag_slug(
     slug: str = Query(..., min_length=1),
-    exclude_id: Optional[uuid.UUID] = None,
+    exclude_id: uuid.UUID | None = None,
     lang: str = "vi",
+    current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TagSlugCheckResponse:
     """
@@ -76,7 +90,7 @@ async def create_tag(
     db: AsyncSession = Depends(get_db),
 ) -> AdminTagResponse:
     tag = await tag_service.create_tag(db, payload)
-    
+
     await log_action(
         db,
         current_user,
@@ -99,7 +113,7 @@ async def update_tag(
     db: AsyncSession = Depends(get_db),
 ) -> AdminTagResponse:
     tag = await tag_service.update_tag(db, tag_id, payload)
-    
+
     await log_action(
         db,
         current_user,
@@ -122,7 +136,7 @@ async def delete_tag(
 ) -> None:
     tag = await tag_service.get_tag_by_id(db, tag_id)
     await tag_service.delete_tag(db, tag_id)
-    
+
     await log_action(
         db,
         current_user,
@@ -144,7 +158,7 @@ async def toggle_tag_status(
     db: AsyncSession = Depends(get_db),
 ) -> AdminTagResponse:
     tag = await tag_service.toggle_tag_status(db, tag_id, payload.is_active)
-    
+
     await log_action(
         db,
         current_user,

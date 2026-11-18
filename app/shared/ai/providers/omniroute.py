@@ -1,17 +1,19 @@
 import time
-import httpx
-from typing import Any, Dict, List, Optional
 import uuid
+from typing import Any
+
+import httpx
 from loguru import logger
 
-from app.shared.ai.base import BaseAIProvider
 from app.core.database import SessionLocal
 from app.modules.ai_hub.models import AIRequestLog
+from app.shared.ai.base import BaseAIProvider
 
 
 def estimate_cost(model_name: str, prompt_tokens: int, completion_tokens: int) -> float:
     """
-    Ước lượng chi phí cuộc gọi dựa trên số lượng token và giá tiền thực tế của nhà cung cấp (trên 1 triệu token).
+    Ước lượng chi phí cuộc gọi dựa trên số lượng token và giá tiền thực tế
+    của nhà cung cấp (trên 1 triệu token).
     """
     pricing = {
         "gemini-2.5-flash": {"input": 0.075, "output": 0.30},
@@ -38,7 +40,9 @@ def estimate_cost(model_name: str, prompt_tokens: int, completion_tokens: int) -
         return 0.0
 
     price = pricing[model_key]
-    cost = (prompt_tokens * price["input"] + completion_tokens * price["output"]) / 1_000_000
+    cost = (
+        prompt_tokens * price["input"] + completion_tokens * price["output"]
+    ) / 1_000_000
     return cost
 
 
@@ -49,6 +53,7 @@ def normalize_to_1536_dimensions(vector: list[float]) -> list[float]:
     - Nếu thừa chiều (N > 1536): Cắt bớt và chuẩn hóa L2 (L2 normalization).
     """
     import math
+
     current_dim = len(vector)
     if current_dim == 1536:
         return vector
@@ -71,20 +76,22 @@ def normalize_to_1536_dimensions(vector: list[float]) -> list[float]:
 async def save_log_to_db(
     model: str,
     prompt: str,
-    response: Optional[str] = None,
+    response: str | None = None,
     tokens_prompt: int = 0,
     tokens_completion: int = 0,
     cost: float = 0.0,
     latency_ms: int = 0,
     status: str = "SUCCESS",
-    error_message: Optional[str] = None,
-    user_id: Optional[uuid.UUID] = None,
-    username: Optional[str] = None,
-    db_session: Optional[Any] = None,
+    error_message: str | None = None,
+    user_id: uuid.UUID | None = None,
+    username: str | None = None,
+    db_session: Any | None = None,
 ) -> None:
     """
-    Hàm helper lưu log vào Postgres DB sử dụng session được truyền vào hoặc tự tạo mới.
+    Lưu log cuộc gọi AI vào Postgres DB bằng session độc lập để không
+    commit sớm hay làm bẩn transaction trên session của caller.
     """
+    _ = db_session  # Giữ tham số để tương thích ngược, không commit trên caller session
     log_item = AIRequestLog(
         user_id=user_id,
         username=username,
@@ -99,30 +106,23 @@ async def save_log_to_db(
         error_message=error_message,
     )
 
-    async def _insert(session):
-        session.add(log_item)
-        await session.commit()
-
     try:
-        if db_session:
-            # Sử dụng session có sẵn của request hiện tại
-            db_session.add(log_item)
-            await db_session.commit()
-        else:
-            # Tạo session mới độc lập (dành cho background tasks/scripts)
-            async with SessionLocal() as session:
-                await _insert(session)
+        async with SessionLocal() as session:
+            session.add(log_item)
+            await session.commit()
     except Exception as e:
         logger.error(f"Failed to save AI request log to DB: {e}")
 
 
 class OmniRouteProvider(BaseAIProvider):
     """
-    OmniRoute Provider giao tiếp với OmniRoute Gateway qua giao thức tương thích OpenAI API.
-    Đồng thời tự động ghi nhận logs cuộc gọi vào database chính của hệ thống.
+    OmniRoute Provider giao tiếp với OmniRoute Gateway qua giao thức tương thích
+    OpenAI API. Đồng thời tự động ghi nhận logs cuộc gọi vào database chính.
     """
 
-    def __init__(self, api_key: str, base_url: str, default_model: Optional[str] = None):
+    def __init__(
+        self, api_key: str, base_url: str, default_model: str | None = None
+    ):
         self.api_key = api_key
         # Đảm bảo base_url kết thúc bằng /v1 nếu cần, hoặc cấu hình chính xác
         self.base_url = base_url.rstrip("/")
@@ -131,10 +131,10 @@ class OmniRouteProvider(BaseAIProvider):
     async def generate_text(
         self,
         prompt: str,
-        system_instruction: Optional[str] = None,
-        history: Optional[List[Dict[str, Any]]] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
+        system_instruction: str | None = None,
+        history: list[dict[str, Any]] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
         **kwargs: Any,
     ) -> str:
         url = f"{self.base_url}/v1/chat/completions"
@@ -157,7 +157,7 @@ class OmniRouteProvider(BaseAIProvider):
 
         messages.append({"role": "user", "content": prompt})
 
-        # Cho phép lấy model từ kwargs truyền động, nếu không thì fallback về default_model
+        # Cho phép lấy model từ kwargs truyền động, fallback về default_model
         model_to_use = kwargs.pop("model", self.default_model)
 
         # Trích xuất biến metadata trả ngược nếu có
@@ -175,7 +175,9 @@ class OmniRouteProvider(BaseAIProvider):
 
         payload.update(kwargs)
 
-        logger.debug(f"Calling OmniRoute: {url} with model {model_to_use}. Payload: {payload}")
+        logger.debug(
+            f"Calling OmniRoute: {url} with model {model_to_use}. Payload: {payload}"
+        )
 
         start_time = time.time()
         try:
@@ -183,9 +185,9 @@ class OmniRouteProvider(BaseAIProvider):
                 response = await client.post(url, headers=headers, json=payload)
                 response.raise_for_status()
                 data = response.json()
-                content = data["choices"][0]["message"]["content"]
+                content = str(data["choices"][0]["message"]["content"])
 
-                # Lấy mô hình thực tế xử lý (có thể khác model_to_use nếu xảy ra fallback)
+                # Lấy mô hình thực tế xử lý (có thể khác nếu xảy ra fallback)
                 actual_model = data.get("model", model_to_use)
                 if isinstance(response_meta, dict):
                     response_meta["actual_model"] = actual_model
@@ -239,7 +241,7 @@ class OmniRouteProvider(BaseAIProvider):
             logger.error(f"Error calling OmniRoute: {error_msg}")
             raise
 
-    async def generate_embedding(self, text: str, **kwargs: Any) -> List[float]:
+    async def generate_embedding(self, text: str, **kwargs: Any) -> list[float]:
         url = f"{self.base_url}/v1/embeddings"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -283,10 +285,14 @@ class OmniRouteProvider(BaseAIProvider):
                 cost = estimate_cost(actual_model, tokens_prompt, 0)
 
                 # Ghi log thành công vào DB
+                summary_msg = (
+                    f"[Vector Embedding {original_len} dimensions -> "
+                    f"Normalized to {len(normalized_embedding)}]"
+                )
                 await save_log_to_db(
                     model=actual_model,
                     prompt=text,
-                    response=f"[Vector Embedding {original_len} dimensions -> Normalized to {len(normalized_embedding)}]",
+                    response=summary_msg,
                     tokens_prompt=tokens_prompt,
                     tokens_completion=0,
                     cost=cost,
@@ -324,7 +330,7 @@ class OmniRouteProvider(BaseAIProvider):
             logger.error(f"Error calling OmniRoute Embedding: {error_msg}")
             raise
 
-    async def list_models(self) -> List[Dict[str, Any]]:
+    async def list_models(self) -> list[dict[str, Any]]:
         """
         Gọi endpoint /v1/models của OmniRoute để lấy danh sách các model.
         """
@@ -338,7 +344,8 @@ class OmniRouteProvider(BaseAIProvider):
                 response = await client.get(url, headers=headers)
                 response.raise_for_status()
                 data = response.json()
-                return data.get("data", [])
+                raw_data = data.get("data", [])
+                return list(raw_data) if isinstance(raw_data, list) else []
         except Exception as e:
             logger.error(f"Error fetching models from OmniRoute: {e}")
             return []

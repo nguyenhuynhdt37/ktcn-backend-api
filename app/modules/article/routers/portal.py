@@ -1,20 +1,19 @@
 import uuid
 from datetime import datetime
-from typing import Optional
-from fastapi import APIRouter, Depends, Query, HTTPException, Request, Response, Cookie
-from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel
-import redis.asyncio as aioredis
-from app.shared.redis import get_redis
-from app.core.config import settings
 
+import redis.asyncio as aioredis
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
 from app.core.database import get_db
 from app.modules.article.schemas import (
     PortalArticleListResponse,
+    PortalArticlePaginationResponse,
     PortalArticleResponse,
-    PortalArticlePaginationResponse
 )
 from app.modules.article.service import article_service
+from app.shared.redis import get_redis
 
 router = APIRouter()
 
@@ -24,29 +23,29 @@ async def list_all_articles_portal(
     request: Request,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=100),
-    search: Optional[str] = Query(default=None),
-    category_slug: Optional[str] = Query(default=None),
-    department_id: Optional[uuid.UUID] = Query(default=None),
-    program_id: Optional[uuid.UUID] = Query(default=None),
-    article_type: Optional[str] = Query(default=None),
-    category_slugs: Optional[list[str]] = Query(default=None, alias="category_slugs"),
-    category_slugs_arr: Optional[list[str]] = Query(default=None, alias="category_slugs[]"),
-    exclude_category_slugs: Optional[list[str]] = Query(default=None, alias="exclude_category_slugs"),
-    exclude_category_slugs_arr: Optional[list[str]] = Query(default=None, alias="exclude_category_slugs[]"),
-    tag_slug: Optional[str] = Query(default=None),
-    author_username: Optional[str] = Query(default=None),
-    is_pinned: Optional[bool] = Query(default=None),
-    has_thumbnail: Optional[bool] = Query(default=None),
-    published_from: Optional[datetime] = Query(default=None),
-    published_to: Optional[datetime] = Query(default=None),
+    search: str | None = Query(default=None),
+    category_slug: str | None = Query(default=None),
+    department_id: uuid.UUID | None = Query(default=None),
+    program_id: uuid.UUID | None = Query(default=None),
+    article_type: str | None = Query(default=None),
+    category_slugs: list[str] | None = Query(default=None, alias="category_slugs"),
+    category_slugs_arr: list[str] | None = Query(default=None, alias="category_slugs[]"),
+    exclude_category_slugs: list[str] | None = Query(default=None, alias="exclude_category_slugs"),
+    exclude_category_slugs_arr: list[str] | None = Query(default=None, alias="exclude_category_slugs[]"),
+    tag_slug: str | None = Query(default=None),
+    author_username: str | None = Query(default=None),
+    is_pinned: bool | None = Query(default=None),
+    has_thumbnail: bool | None = Query(default=None),
+    published_from: datetime | None = Query(default=None),
+    published_to: datetime | None = Query(default=None),
     sort_by: str = Query(default="publish_at"),
     sort_dir: str = Query(default="desc"),
-    lang: Optional[str] = Query(default=None),
+    lang: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> PortalArticlePaginationResponse:
     allowed_sort_fields = {
-        "title", "slug", "created_at", "updated_at", 
-        "publish_at", "published_at", "view_count", 
+        "title", "slug", "created_at", "updated_at",
+        "publish_at", "published_at", "view_count",
         "sort_order", "is_pinned"
     }
     if sort_by not in allowed_sort_fields:
@@ -142,16 +141,22 @@ async def get_article_detail_portal(
     slug: str,
     request: Request,
     response: Response,
-    lang: Optional[str] = Query(default=None),
-    guest_uuid: Optional[str] = Cookie(None),
+    lang: str | None = Query(default=None),
+    guest_uuid: str | None = Cookie(None),
     db: AsyncSession = Depends(get_db),
     redis_client: aioredis.Redis = Depends(get_redis),
 ) -> PortalArticleResponse:
-    # 1. Xác định hoặc sinh mới guest_uuid
+    # 1. Lấy hoặc sinh mới guest_uuid hợp lệ (bỏ qua cookie sai định dạng)
     is_new_guest = False
-    if not guest_uuid:
-        guest_uuid = str(uuid.uuid4())
+    try:
+        resolved_guest_uuid = str(uuid.UUID(guest_uuid)) if guest_uuid else ""
+    except (ValueError, TypeError, AttributeError):
+        resolved_guest_uuid = ""
+
+    if not resolved_guest_uuid:
+        resolved_guest_uuid = str(uuid.uuid4())
         is_new_guest = True
+    guest_uuid = resolved_guest_uuid
 
     # 2. Lấy IP khách hàng làm fallback
     from app.shared.client_ip import get_client_ip
@@ -162,11 +167,11 @@ async def get_article_detail_portal(
 
     # 3. Lấy chi tiết bài viết và tăng view (có kiểm tra trùng lặp qua Redis)
     article = await article_service.get_article_by_slug_portal(
-        db, 
-        slug=slug, 
-        lang=resolved_lang, 
-        guest_uuid=guest_uuid, 
-        client_ip=client_ip, 
+        db,
+        slug=slug,
+        lang=resolved_lang,
+        guest_uuid=guest_uuid,
+        client_ip=client_ip,
         redis_client=redis_client
     )
 
