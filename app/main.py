@@ -134,6 +134,8 @@ from app.modules.program import (
     portal_router as program_portal_router,
 )
 from app.modules.program.models import Program, ProgramTranslation  # noqa: F401
+from app.modules.document import document_admin_router, document_portal_router
+from app.modules.document.models import Document  # noqa: F401
 from app.modules.search.router import router as search_router
 from app.modules.setting import setting_admin_router, setting_portal_router
 from app.modules.setting.models import Setting  # noqa: F401
@@ -324,6 +326,12 @@ app.include_router(
 )
 app.include_router(
     degree_portal_router, prefix=f"{api_v1}/portal/degrees", tags=["portal-degrees"]
+)
+app.include_router(
+    document_admin_router, prefix=f"{api_v1}/admin/documents", tags=["admin-documents"]
+)
+app.include_router(
+    document_portal_router, prefix=f"{api_v1}/portal/documents", tags=["portal-documents"]
 )
 app.include_router(
     banner_admin_router, prefix=f"{api_v1}/admin/banners", tags=["admin-banners"]

@@ -98,6 +98,72 @@ class FooterLinkItem(BaseModel):
         return _validate_safe_url(str(v or ""), allow_empty=False)
 
 
+HOME_SHORTCUT_ICONS = (
+    "calendar",
+    "mail",
+    "file-text",
+    "book-open",
+    "briefcase",
+    "message-circle",
+    "link",
+    "download",
+    "graduation-cap",
+    "users",
+)
+
+
+class HomeShortcutItem(BaseModel):
+    """Lối tắt ở thanh biểu tượng trang chủ (cấu hình động trong admin)."""
+
+    label_vi: str = Field(..., min_length=1, max_length=150)
+    label_en: str = Field(..., min_length=1, max_length=150)
+    href: str = Field(..., min_length=1, max_length=500)
+    icon: str = Field(default="link", max_length=40)
+    open_in_new_tab: bool = False
+
+    @field_validator("label_vi", "label_en", mode="before")
+    @classmethod
+    def strip_labels(cls, v: Any) -> str:
+        return str(v or "").strip()
+
+    @field_validator("href", mode="before")
+    @classmethod
+    def validate_href(cls, v: Any) -> str:
+        return _validate_safe_url(str(v or ""), allow_empty=False)
+
+    @field_validator("icon", mode="before")
+    @classmethod
+    def validate_icon(cls, v: Any) -> str:
+        icon = str(v or "link").strip().lower()
+        return icon if icon in HOME_SHORTCUT_ICONS else "link"
+
+
+def default_home_shortcuts() -> list[HomeShortcutItem]:
+    return [
+        HomeShortcutItem(label_vi="Lịch tuần", label_en="Weekly calendar", href="/lich-tuan", icon="calendar"),
+        HomeShortcutItem(
+            label_vi="Thư điện tử", label_en="Webmail", href="https://outlook.office.com/",
+            icon="mail", open_in_new_tab=True,
+        ),
+        HomeShortcutItem(
+            label_vi="Văn bản – Biểu mẫu", label_en="Documents & forms",
+            href="/tai-lieu/van-ban-bieu-mau", icon="file-text",
+        ),
+        HomeShortcutItem(
+            label_vi="Bài giảng – Giáo trình", label_en="Lectures & textbooks",
+            href="/tai-lieu/bai-giang-giao-trinh", icon="book-open",
+        ),
+        HomeShortcutItem(
+            label_vi="Thông tin việc làm", label_en="Career opportunities",
+            href="/tin-tuc?category_slug=tuyen-dung", icon="briefcase",
+        ),
+        HomeShortcutItem(
+            label_vi="Hỏi đáp", label_en="Questions & answers",
+            href="/tu-van-tuyen-sinh", icon="message-circle",
+        ),
+    ]
+
+
 class SiteSettingsPayload(BaseModel):
     footer_builder: FooterBuilder | None = None
     header_logo_width: int = Field(default=320, ge=80, le=600)
@@ -158,6 +224,9 @@ class SiteSettingsPayload(BaseModel):
 
     quick_links: list[FooterLinkItem] = Field(default_factory=default_quick_links)
     external_links: list[FooterLinkItem] = Field(default_factory=default_external_links)
+    home_shortcuts: list[HomeShortcutItem] = Field(
+        default_factory=default_home_shortcuts, max_length=12
+    )
 
     @field_validator(
         "header_logo_object_key",
