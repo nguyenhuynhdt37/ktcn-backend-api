@@ -14,6 +14,7 @@ from app.core.middleware.security import (
     RequestSizeLimiterMiddleware,
     SecurityHeadersMiddleware,
 )
+from app.core.middleware.revalidate_on_change import RevalidateOnChangeMiddleware
 from app.core.middleware.visitor_counter import VisitorCounterMiddleware
 
 # Import all models to register them on Base.metadata and prevent NoReferencedTableError
@@ -197,6 +198,7 @@ app.add_middleware(RequestSizeLimiterMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(VisitorCounterMiddleware)
+app.add_middleware(RevalidateOnChangeMiddleware)
 
 # Configure CORS (Cross-Origin Resource Sharing)
 cors_origins = [o for o in settings.BACKEND_CORS_ORIGINS if o and o != "*"]

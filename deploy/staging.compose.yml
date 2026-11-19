@@ -42,6 +42,7 @@ services:
   frontend:
     image: ${FRONTEND_IMAGE:?Set FRONTEND_IMAGE}
     restart: unless-stopped
+    env_file: frontend.env  # REVALIDATION_TOKEN (must match FRONTEND_REVALIDATE_TARGETS in backend.env)
     environment:
       API_URL: http://backend:8000
       NEXT_PUBLIC_API_URL: https://test-api-ktcn.itup.io.vn

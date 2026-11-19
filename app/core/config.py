@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     # Optional: pin the single header your edge proxy sets (e.g. "cf-connecting-ip").
     CLIENT_IP_HEADER: str = ""
 
+    # Các site frontend cần làm mới cache sau khi admin đổi nội dung, dạng JSON:
+    # [{"url": "http://frontend:3000/api/revalidate", "token": "<REVALIDATION_TOKEN>"}]
+    # Để trống nếu không dùng (frontend sẽ tự làm mới theo chu kỳ cache).
+    FRONTEND_REVALIDATE_TARGETS: str = ""
+
     # Postgres
     POSTGRES_SERVER: str = "localhost"
     POSTGRES_PORT: int = 5432
