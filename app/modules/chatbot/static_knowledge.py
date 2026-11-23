@@ -108,7 +108,7 @@ STATIC_CONTACT = {
         "- Đơn vị: Trường Kỹ thuật và Công nghệ - Trường Đại học Vinh\n"
         "- Địa chỉ trường: 182 Lê Duẩn, Thành phố Vinh, Nghệ An (Trường Đại học Vinh).\n"
         "- Điện thoại: 0238 3855 452\n"
-        "- Email: vienktcn@vinhuni.edu.vn\n"
+        "- Email: cet@vinhuni.edu.vn\n"
         "- Website: https://ktcn.itup.io.vn\n"
         "- Facebook Fanpage: https://www.facebook.com/Vienktcn\n"
         "- Phụ trách Trường / Chịu trách nhiệm nội dung: PGS. TS. Hoàng Hữu Việt — Phó Hiệu trưởng, phụ trách Trường\n"
@@ -120,7 +120,7 @@ STATIC_CONTACT = {
         "- Institution: College of Engineering and Technology - Vinh University\n"
         "- School address: 182 Le Duan, Vinh City, Nghe An (Vinh University).\n"
         "- Phone: 0238 3855 452\n"
-        "- Email: vienktcn@vinhuni.edu.vn\n"
+        "- Email: cet@vinhuni.edu.vn\n"
         "- Website: https://ktcn.itup.io.vn\n"
         "- Facebook Fanpage: https://www.facebook.com/Vienktcn\n"
         "- Acting Head / Content Manager: Assoc. Prof. Dr. Hoang Huu Viet — Vice Rector\n"
@@ -151,7 +151,7 @@ def build_contact_knowledge(settings_obj, lang: str) -> str:
         else getattr(settings_obj, "address_en", None)
     ) or ("182 Lê Duẩn, Thành phố Vinh, Nghệ An" if vi else "182 Le Duan, Vinh City, Nghe An")
     phone = getattr(settings_obj, "phone", None) or "0238 3855 452"
-    email = getattr(settings_obj, "email", None) or "vienktcn@vinhuni.edu.vn"
+    email = getattr(settings_obj, "email", None) or "cet@vinhuni.edu.vn"
     website_raw = getattr(settings_obj, "website", None) or "ktcn.itup.io.vn"
     website = website_raw if website_raw.startswith(("http://", "https://")) else f"https://{website_raw}"
     facebook_url = getattr(settings_obj, "facebook_url", None) or "https://www.facebook.com/Vienktcn"

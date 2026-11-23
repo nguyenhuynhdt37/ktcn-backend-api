@@ -196,7 +196,7 @@ class SiteSettingsPayload(BaseModel):
     address_vi: str = Field(default="182 Lê Duẩn, Thành phố Vinh, Nghệ An", min_length=1, max_length=500)
     address_en: str = Field(default="182 Le Duan, Vinh City, Nghe An", min_length=1, max_length=500)
     phone: str = Field(default="0238 3855 452", max_length=100)
-    email: str = Field(default="vienktcn@vinhuni.edu.vn", max_length=255)
+    email: str = Field(default="cet@vinhuni.edu.vn", max_length=255)
     website: str = Field(default="ktcn.itup.io.vn", max_length=255)
 
     responsible_officer_vi: str = Field(

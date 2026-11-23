@@ -178,7 +178,7 @@ async def test_site_settings_portal_and_admin_endpoints(
             "address_vi": "182 Lê Duẩn, Thành phố Vinh, Nghệ An",
             "address_en": "182 Le Duan, Vinh City, Nghe An",
             "phone": marker_phone,
-            "email": "vienktcn@vinhuni.edu.vn",
+            "email": "cet@vinhuni.edu.vn",
             "website": "ktcn.itup.io.vn",
             "responsible_officer_vi": "PGS. TS. Hoàng Hữu Việt - Hiệu phó",
             "responsible_officer_en": "Assoc. Prof. Dr. Hoang Huu Viet - Vice Rector",
